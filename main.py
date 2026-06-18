@@ -89,14 +89,31 @@ def update_google_sheet(df, spreadsheet_id):
     print("書き込みが完了しました。")
 
 if __name__ == "__main__":
+    # 環境変数から設定を読み込む
     SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
+    
+    # デバッグ用：GitHubのログに、IDが読み込めているか（空でないか）を出力する
+    if SPREADSHEET_ID:
+        print(f"【確認】SPREADSHEET_ID は正常に読み込まれています: {SPREADSHEET_ID[:5]}...（セキュリティのため一部非表示）")
+    else:
+        print("【警告】GitHubのSecretsから SPREADSHEET_ID が取得できませんでした。")
     
     date_str = get_target_date()
     df_oi, df_tp = download_jpx_data(date_str)
     
+    # データが取得できた場合のみ処理を続行
     if df_oi is not None or df_tp is not None:
         df_final = process_data(df_oi, df_tp)
+        
         if SPREADSHEET_ID:
-            update_google_sheet(df_final, SPREADSHEET_ID)
+            try:
+                update_google_sheet(df_final, SPREADSHEET_ID)
+                print("【成功】すべての処理が正常に完了しました。")
+            except Exception as e:
+                print(f"【エラー】スプレッドシートへの書き込み中に問題が発生しました: {e}")
+                import sys
+                sys.exit(1) # 書き込み失敗時はエラーにする
         else:
-            print("SPREADSHEET_ID が設定されていないため、書き込みをスキップします。")
+            print("【判定】SPREADSHEET_ID が無いため、書き込みをスキップして正常終了します。")
+    else:
+        print("【判定】データが取得できなかったため、処理を終了します。")
