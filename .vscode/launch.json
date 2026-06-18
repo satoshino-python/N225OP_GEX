@@ -8,7 +8,7 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "env": {
-                "SPREADSHEET_ID": "ここにあなたのスプレッドシートIDを貼り付け"
+                "SPREADSHEET_ID": "108ryY_IVrn7sE3R4XekgQa89x_gGCX0V0cyGbmtXf60"
             }
         }
     ]

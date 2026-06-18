@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from io import StringIO
+from io import StringIO, BytesIO
 
 def get_target_date():
     # 実行時のJST（日本時間）の日付を取得（GitHub Actionsは標準でUTCのため+9時間する）
@@ -24,7 +24,7 @@ def download_jpx_data(date_str):
     # 1. 建玉残高 (Excel) のダウンロード
     res_oi = requests.get(oi_url, headers=headers)
     if res_oi.status_code == 200:
-        df_oi = pd.read_excel(res_oi.content)
+        df_oi = pd.read_excel(BytesIO(res_oi.content))
         print("建玉残高の取得に成功しました。")
     else:
         print(f"建玉残高の取得に失敗 (Status: {res_oi.status_code})")
@@ -89,31 +89,33 @@ def update_google_sheet(df, spreadsheet_id):
     print("書き込みが完了しました。")
 
 if __name__ == "__main__":
-    # 環境変数から設定を読み込む
     SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
     
-    # デバッグ用：GitHubのログに、IDが読み込めているか（空でないか）を出力する
     if SPREADSHEET_ID:
-        print(f"【確認】SPREADSHEET_ID は正常に読み込まれています: {SPREADSHEET_ID[:5]}...（セキュリティのため一部非表示）")
+        print(f"【確認】SPREADSHEET_ID は正常に読み込まれています: {SPREADSHEET_ID[:5]}...")
     else:
-        print("【警告】GitHubのSecretsから SPREADSHEET_ID が取得できませんでした。")
+        print("【警告】SPREADSHEET_ID が取得できませんでした。")
     
     date_str = get_target_date()
     df_oi, df_tp = download_jpx_data(date_str)
     
-    # データが取得できた場合のみ処理を続行
-    if df_oi is not None or df_tp is not None:
-        df_final = process_data(df_oi, df_tp)
-        
-        if SPREADSHEET_ID:
-            try:
-                update_google_sheet(df_final, SPREADSHEET_ID)
-                print("【成功】すべての処理が正常に完了しました。")
-            except Exception as e:
-                print(f"【エラー】スプレッドシートへの書き込み中に問題が発生しました: {e}")
-                import sys
-                sys.exit(1) # 書き込み失敗時はエラーにする
-        else:
-            print("【判定】SPREADSHEET_ID が無いため、書き込みをスキップして正常終了します。")
+    # データがどちらも取得できなかったらその時点で終了
+    if df_oi is None and df_tp is None:
+        print("【判定】データがどちらも取得できなかったため、処理を終了します。")
+        import sys
+        sys.exit(1)
+
+    # データの加工・成形
+    df_final = process_data(df_oi, df_tp)
+    
+    # スプレッドシートへの書き込み（IDと認証情報の両方がある場合のみ実行）
+    if SPREADSHEET_ID and os.environ.get("GOOGLE_CREDENTIALS"):
+        try:
+            update_google_sheet(df_final, SPREADSHEET_ID)
+            print("【成功】すべての処理が正常に完了し、スプレッドシートに書き込まれました！")
+        except Exception as e:
+            print(f"【エラー】スプレッドシートへの書き込み中に問題が発生しました: {e}")
+            import sys
+            sys.exit(1)
     else:
-        print("【判定】データが取得できなかったため、処理を終了します。")
+        print("【判定】SPREADSHEET_ID または GOOGLE_CREDENTIALS が設定されていないため、書き込みをスキップしました。")
