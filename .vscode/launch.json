@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: JPX Scraper Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "env": {
+                "SPREADSHEET_ID": "ここにあなたのスプレッドシートIDを貼り付け"
+            }
+        }
+    ]
+}
