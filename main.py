@@ -135,6 +135,100 @@ def process_data(df_oi, df_tp):
     print(f"加工完了: 別紙1シートから {len(df_final)} 行のデータを正常に成形しました。")
     return df_final
 
+def process_tp_data(df_tp):
+    print("--- 理論価格データの加工・成形（ose[日付]tp.csv） ---")
+    
+    if df_tp is None or df_tp.empty:
+        print("警告: 理論価格データ(df_tp)がないため、加工をスキップします。")
+        return pd.DataFrame()
+
+    # 1. 添付ファイルの定義に基づきヘッダー（列名）を強制設定
+    headers = [
+        "商品コード", "商品タイプ", "限月", "権利行使価格", "予備",
+        "銘柄コード_put", "終値_put", "予備_put", "理論価格_put", "ボラティリティ_put",
+        "銘柄コード_call", "終値_call", "予備_call", "理論価格_call", "ボラティリティ_call",
+        "原資産終値", "基準ボラティリティ"
+    ]
+    
+    # 元データの列数がヘッダーと一致することを確認して割り当て
+    if len(df_tp.columns) == len(headers):
+        df_tp.columns = headers
+    else:
+        # 万が一ヘッダーなしでPandasが1行目を吸い上げて列数が1つズレている場合の安全処理
+        df_tp = pd.read_csv(StringIO(df_tp.to_csv(header=False, index=False)), names=headers)
+
+    # 2. 【条件1】商品コードが「NK225E」のものに絞る
+    df_filtered = df_tp[df_tp["商品コード"].astype(str).str.strip() == "NK225E"].copy()
+    if df_filtered.empty:
+        print("⚠️ 商品コード 'NK225E' に合致するデータが見つかりませんでした。")
+        return pd.DataFrame()
+
+    # 型を安全に数値型（int / float）に変換
+    df_filtered["限月"] = pd.to_numeric(df_filtered["限月"], errors='coerce')
+    df_filtered["権利行使価格"] = pd.to_numeric(df_filtered["権利行使価格"], errors='coerce')
+    df_filtered["原資産終値"] = pd.to_numeric(df_filtered["原資産終値"], errors='coerce')
+
+    # 3. 【条件2】限月が最小値から3つに絞る
+    unique_months = sorted(df_filtered["限月"].dropna().unique())
+    target_months = unique_months[:3]  # 最小値から3つを取得
+    print(f"対象とする限月（上位3つ）: {target_months}")
+    df_filtered = df_filtered[df_filtered["限月"].isin(target_months)]
+
+    # 4. 【条件3】権利行使価格が原資産終値から上下15％のものに絞る
+    # ※1行目の原資産終値を基準に判定（通常はすべて同値ですが安全のため）
+    underlying_price = df_filtered["原資産終値"].iloc[0]
+    min_strike = underlying_price * 0.85
+    max_strike = underlying_price * 1.15
+    print(f"原資産終値: {underlying_price}円 (対象権利行使価格: {int(min_strike)}円 〜 {int(max_strike)}円)")
+    
+    df_filtered = df_filtered[
+        (df_filtered["権利行使価格"] >= min_strike) & 
+        (df_filtered["権利行使価格"] <= max_strike)
+    ]
+
+    # 5. 【条件4・5】プットとコールを縦に分解し、指定された5列＋種別、取得日の形にする
+    # プットデータの切り出し
+    put_cols = {
+        "限月": "限月",
+        "権利行使価格": "権利行使価格",
+        "理論価格_put": "理論価格",
+        "ボラティリティ_put": "ボラティリティ",
+        "原資産終値": "原資産終値"
+    }
+    df_put = df_filtered[list(put_cols.keys())].rename(columns=put_cols).copy()
+    df_put["プットコール種別"] = "put"
+
+    # コールデータの切り出し
+    call_cols = {
+        "限月": "限月",
+        "権利行使価格": "権利行使価格",
+        "理論価格_call": "理論価格",
+        "ボラティリティ_call": "ボラティリティ",
+        "原資産終値": "原資産終値"
+    }
+    df_call = df_filtered[list(call_cols.keys())].rename(columns=call_cols).copy()
+    df_call["プットコール種別"] = "call"
+
+    # 縦に綺麗に結合
+    df_tp_combined = pd.concat([df_put, df_call], ignore_index=True)
+
+    # 取得日を付与（既存の共通仕様に合わせる）
+    current_date = get_target_date()
+    df_tp_combined["取得日"] = current_date
+
+    # ご指定の列名および順序に並び替え（「取得日」も先頭に集約すると管理がラクです）
+    final_cols = ["取得日", "プットコール種別", "限月", "権利行使価格", "理論価格", "ボラティリティ", "原資産終値"]
+    df_final_tp = df_tp_combined[final_cols].copy()
+
+    # 数値のクレンジング処理（理論価格やボラティリティのハイフン等を0に置換）
+    df_final_tp["理論価格"] = pd.to_numeric(df_final_tp["理論価格"].astype(str).str.replace(r'[\s,]', '', regex=True).replace('-', '0'), errors='coerce').fillna(0).astype(float)
+    df_final_tp["ボラティリティ"] = pd.to_numeric(df_final_tp["ボラティリティ"].astype(str).str.replace(r'[\s,]', '', regex=True).replace('-', '0'), errors='coerce').fillna(0).astype(float)
+    df_final_tp["限月"] = df_final_tp["限月"].astype(int)
+    df_final_tp["権利行使価格"] = df_final_tp["権利行使価格"].astype(int)
+
+    print(f"加工完了: 理論価格データから合計 {len(df_final_tp)} 行のデータを成形しました。")
+    return df_final_tp
+
 def update_google_sheet(df, spreadsheet_id):
     print("--- Googleスプレッドシートへの書き込み ---")
     scopes = [
