@@ -3,6 +3,7 @@ import datetime
 import requests
 import pandas as pd
 import gspread
+import json
 from google.oauth2.service_account import Credentials
 from io import StringIO, BytesIO
 import re
@@ -230,31 +231,50 @@ def process_tp_data(df_tp):
     return df_final_tp
 
 def update_google_sheet(df, spreadsheet_id):
-    print("--- Googleスプレッドシートへの書き込み ---")
+    # 1. 権限スコープの定義
     scopes = [
         'https://www.googleapis.com/auth/spreadsheets',
         'https://www.googleapis.com/auth/drive'
     ]
     
-    # GitHubのSecretから認証情報を取得
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS")
-    if not creds_json:
-        print("エラー: GOOGLE_CREDENTIALS が設定されていません。")
+    # 2. 環境変数から認証情報を取得
+    google_creds_env = os.environ.get("GOOGLE_CREDENTIALS")
+    
+    if not google_creds_env:
+        print("【判定】GOOGLE_CREDENTIALS が設定されていないため、書き込みをスキップします。")
         return
+
+    # 3. 【重要】GitHub Secrets（文字列）とローカル（ファイルパス）の自動判別認証
+    try:
+        # まずはGitHub Secretsの想定で「JSON文字列そのもの」としてパースを試みる
+        creds_dict = json.loads(google_creds_env)
+        credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        print("→ [GitHub Actions環境] Google認証情報(JSON文字列)の読み込みに成功しました。")
+    except json.JSONDecodeError:
+        # パースに失敗した場合は、ローカル環境の「ファイル名(.json)」として処理する
+        if os.path.exists(google_creds_env):
+            credentials = Credentials.from_service_account_file(google_creds_env, scopes=scopes)
+            print(f"→ [ローカル環境] 認証ファイル({google_creds_env})の読み込みに成功しました。")
+        else:
+            print(f"【エラー】指定された認証ファイルが見つかりません: {google_creds_env}")
+            return
+
+    # 4. gspreadのクライアント初期化と書き込み
+    try:
+        gc = gspread.authorize(credentials)
+        sh = gc.open_by_key(spreadsheet_id)
         
-    import json
-    creds_dict = json.loads(creds_json)
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    gc = gspread.authorize(creds)
-    
-    # スプレッドシートを開き、最初のシート（シート1）に追記
-    sh = gc.open_by_key(spreadsheet_id)
-    worksheet = sh.get_worksheet(0)
-    
-    # スプレッドシートへ追加（ヘッダーなしでデータ行のみ追記する場合は values = df.values.tolist() ）
-    values = [df.columns.values.tolist()] + df.values.tolist()
-    worksheet.append_rows(values, value_input_option='USER_ENTERED')
-    print("書き込みが完了しました。")
+        # 1番目のシート（シート1）を取得して書き込み
+        worksheet = sh.get_worksheet(0)
+        
+        # DataFrameをリスト形式（ネストされた配列）に変換して追記
+        data_to_append = df.values.tolist()
+        worksheet.append_rows(data_to_append)
+        print(f"【成功】スプレッドシートの最初のシートに {len(df)} 行のデータを追記しました。")
+        
+    except Exception as e:
+        print(f"【エラー】Googleスプレッドシートへの通信に失敗しました: {e}")
+        raise e
 
 if __name__ == "__main__":
     SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
