@@ -29,4 +29,7 @@ jobs:
       env:
         GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-      run: python main.py
+      run: |
+        echo "【YMLチェック】SPREADSHEET_IDの文字数: ${#SPREADSHEET_ID}"
+        echo "【YMLチェック】GOOGLE_CREDENTIALSの文字数: ${#GOOGLE_CREDENTIALS}"
+        python main.py
