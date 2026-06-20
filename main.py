@@ -270,64 +270,70 @@ if __name__ == "__main__":
     # データのダウンロード（建玉残高Excel、理論価格CSVの両方を取得）
     df_oi, df_tp = download_jpx_data(date_str)
     
-    # データがどちらも取得できなかったらその時点で終了
     if df_oi is None and df_tp is None:
         print("【判定】データがどちらも取得できなかったため、処理を終了します。")
         import sys
         sys.exit(1)
 
-    # --------------------------------------------------
-    # データの加工・成形フェーズ
-    # --------------------------------------------------
-    # 1. 建玉残高データの加工
+    # 1. 各データの加工・成形
     df_final_oi = process_data(df_oi, df_tp)
-    
-    # 2. 理論価格データの加工
     df_final_tp = process_tp_data(df_tp)
     
     # --------------------------------------------------
-    # 【テスト用】ログへの出力確認フェーズ
+    # 🔗 2つのデータフレームの結合（マージ）フェーズ
     # --------------------------------------------------
-    # 建玉残高の先頭5行を出力
-    if df_final_oi is not None and not df_final_oi.empty:
-        print("\n📸 === 【テスト確認】建玉残高データ(df_final_oi)の先頭5行 ===")
-        print(df_final_oi.head(5).to_string())
+    df_merged = pd.DataFrame() # 空の初期化
+    
+    if (df_final_oi is not None and not df_final_oi.empty) and (df_final_tp is not None and not df_final_tp.empty):
+        print("--- 2つのテーブルを結合します（インナーマージ） ---")
+        
+        # 【データ型調整】oi側の限月(例:"2607")を、tp側の限月(例:202607)の整数型と一致させる
+        # 頭に "20" を付与して "202607" にしてから int に変換
+        df_final_oi["限月"] = pd.to_numeric("20" + df_final_oi["限月"].astype(str), errors='coerce').fillna(0).astype(int)
+        
+        # 指定された4つの組み合わせをキーとして内部結合 (inner merge)
+        # これにより、df_final_tpにある権利行使価格のみが自動で残り、無いものは削除されます
+        join_keys = ["取得日", "プットコール種別", "限月", "権利行使価格"]
+        df_merged = pd.merge(df_final_tp, df_final_oi, on=join_keys, how="inner")
+        
+        # 列の並び順をお好みの綺麗な形に再配置（例: キー項目 -> 理論価格等 -> 建玉残高データ）
+        final_columns_order = [
+            "取得日", "プットコール種別", "限月", "権利行使価格", 
+            "理論価格", "ボラティリティ", "原資産終値", 
+            "取引高", "当日建玉残高", "前日比", "前日建玉残高"
+        ]
+        # 存在する列のみ安全に並び替え
+        df_merged = df_merged[final_columns_order].copy()
+        
+        print(f"結合完了: 条件に合致した {len(df_merged)} 行の統合データを生成しました。")
+
+    # --------------------------------------------------
+    # 📸 【テスト用】結合データのログ出力確認
+    # --------------------------------------------------
+    if not df_merged.empty:
+        print("\n🏆 === 【テスト確認】結合成功データの先頭5行 ===")
+        print(df_merged.head(5).to_string())
         print("=========================================================\n")
         
-        print("\n📋 === 【ヘッダー最終確認: 建玉残高】 ===")
-        print(f"現在の列一覧: {df_final_oi.columns.tolist()} ({len(df_final_oi.columns)}列)")
+        print("\n📋 === 【ヘッダー最終確認: 結合データ】 ===")
+        print(f"現在の列一覧: {df_merged.columns.tolist()} ({len(df_merged.columns)}列)")
         print("===========================================\n")
-
-    # 理論価格の先頭5行を出力
-    if df_final_tp is not None and not df_final_tp.empty:
-        print("\n📸 === 【テスト確認】理論価格データ(df_final_tp)の先頭5行 ===")
-        print(df_final_tp.head(5).to_string())
-        print("=========================================================\n")
-        
-        print("\n📋 === 【ヘッダー最終確認: 理論価格】 ===")
-        print(f"現在の列一覧: {df_final_tp.columns.tolist()} ({len(df_final_tp.columns)}列)")
-        print("===========================================\n")
+    else:
+        print("⚠️ 結合データが空です。キー（限月や権利行使価格）の不一致の可能性があります。")
 
     # --------------------------------------------------
-    # スプレッドシートへの書き込みフェーズ
+    # 📝 スプレッドシートへの書き込みフェーズ
     # --------------------------------------------------
-    # IDと認証情報の両方がある場合のみ実行
     if SPREADSHEET_ID and os.environ.get("GOOGLE_CREDENTIALS"):
         try:
-            # 建玉残高の書き込み（シート1に追記）
-            if df_final_oi is not None and not df_final_oi.empty:
-                print("→ 建玉残高データをスプレッドシートへ書き込みます。")
-                update_google_sheet(df_final_oi, SPREADSHEET_ID)
+            # 結合に成功した綺麗な1つのテーブルのみをスプレッドシートへ追記
+            if not df_merged.empty:
+                print("→ 結合統合データをスプレッドシートへ書き込みます。")
+                update_google_sheet(df_merged, SPREADSHEET_ID)
+                print("【成功】すべての処理が正常に完了し、スプレッドシートに書き込まれました！")
+            else:
+                print("【スキップ】結合データがないため書き込みをスキップしました。")
                 
-            # 理論価格の書き込み
-            # ※もし理論価格を別のシート（例: シート2）に書きたい場合は、
-            # update_google_sheet関数側でワークシートの指定(get_worksheet(1)など)を変更する必要があります
-            if df_final_tp is not None and not df_final_tp.empty:
-                print("→ 理論価格データをスプレッドシートへ書き込みます。")
-                update_google_sheet(df_final_tp, SPREADSHEET_ID)
-                
-            print("【成功】すべての処理が正常に完了し、スプレッドシートに書き込まれました！")
-            
         except Exception as e:
             print(f"【エラー】スプレッドシートへの書き込み中に問題が発生しました: {e}")
             import sys
