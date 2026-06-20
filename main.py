@@ -231,50 +231,24 @@ def process_tp_data(df_tp):
     return df_final_tp
 
 def update_google_sheet(df, spreadsheet_id):
-    # 1. 権限スコープの定義
     scopes = [
         'https://www.googleapis.com/auth/spreadsheets',
         'https://www.googleapis.com/auth/drive'
     ]
     
-    # 2. 環境変数から認証情報を取得
+    # 環境変数から取得した文字列（JSON）をそのままパースして認証
     google_creds_env = os.environ.get("GOOGLE_CREDENTIALS")
+    creds_dict = json.loads(google_creds_env)
+    credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     
-    if not google_creds_env:
-        print("【判定】GOOGLE_CREDENTIALS が設定されていないため、書き込みをスキップします。")
-        return
-
-    # 3. 【重要】GitHub Secrets（文字列）とローカル（ファイルパス）の自動判別認証
-    try:
-        # まずはGitHub Secretsの想定で「JSON文字列そのもの」としてパースを試みる
-        creds_dict = json.loads(google_creds_env)
-        credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        print("→ [GitHub Actions環境] Google認証情報(JSON文字列)の読み込みに成功しました。")
-    except json.JSONDecodeError:
-        # パースに失敗した場合は、ローカル環境の「ファイル名(.json)」として処理する
-        if os.path.exists(google_creds_env):
-            credentials = Credentials.from_service_account_file(google_creds_env, scopes=scopes)
-            print(f"→ [ローカル環境] 認証ファイル({google_creds_env})の読み込みに成功しました。")
-        else:
-            print(f"【エラー】指定された認証ファイルが見つかりません: {google_creds_env}")
-            return
-
-    # 4. gspreadのクライアント初期化と書き込み
-    try:
-        gc = gspread.authorize(credentials)
-        sh = gc.open_by_key(spreadsheet_id)
-        
-        # 1番目のシート（シート1）を取得して書き込み
-        worksheet = sh.get_worksheet(0)
-        
-        # DataFrameをリスト形式（ネストされた配列）に変換して追記
-        data_to_append = df.values.tolist()
-        worksheet.append_rows(data_to_append)
-        print(f"【成功】スプレッドシートの最初のシートに {len(df)} 行のデータを追記しました。")
-        
-    except Exception as e:
-        print(f"【エラー】Googleスプレッドシートへの通信に失敗しました: {e}")
-        raise e
+    # gspreadを使用してスプレッドシートへ書き込み
+    gc = gspread.authorize(credentials)
+    sh = gc.open_by_key(spreadsheet_id)
+    worksheet = sh.get_worksheet(0)
+    
+    # DataFrameをリストに変換して末尾に追記
+    data_to_append = df.values.tolist()
+    worksheet.append_rows(data_to_append)
 
 if __name__ == "__main__":
     # 環境変数からダイレクトに取得
