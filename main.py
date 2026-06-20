@@ -264,7 +264,10 @@ if __name__ == "__main__":
     else:
         print("【警告】SPREADSHEET_ID が取得できませんでした。")
     
+    # ターゲット日付の取得（テスト時は固定日付）
     date_str = get_target_date()
+    
+    # データのダウンロード（建玉残高Excel、理論価格CSVの両方を取得）
     df_oi, df_tp = download_jpx_data(date_str)
     
     # データがどちらも取得できなかったらその時点で終了
@@ -273,17 +276,61 @@ if __name__ == "__main__":
         import sys
         sys.exit(1)
 
-    # データの加工・成形
-    df_final = process_data(df_oi, df_tp)
+    # --------------------------------------------------
+    # データの加工・成形フェーズ
+    # --------------------------------------------------
+    # 1. 建玉残高データの加工
+    df_final_oi = process_data(df_oi, df_tp)
     
-    # スプレッドシートへの書き込み（IDと認証情報の両方がある場合のみ実行）
+    # 2. 理論価格データの加工
+    df_final_tp = process_tp_data(df_tp)
+    
+    # --------------------------------------------------
+    # 【テスト用】ログへの出力確認フェーズ
+    # --------------------------------------------------
+    # 建玉残高の先頭5行を出力
+    if df_final_oi is not None and not df_final_oi.empty:
+        print("\n📸 === 【テスト確認】建玉残高データ(df_final_oi)の先頭5行 ===")
+        print(df_final_oi.head(5).to_string())
+        print("=========================================================\n")
+        
+        print("\n📋 === 【ヘッダー最終確認: 建玉残高】 ===")
+        print(f"現在の列一覧: {df_final_oi.columns.tolist()} ({len(df_final_oi.columns)}列)")
+        print("===========================================\n")
+
+    # 理論価格の先頭5行を出力
+    if df_final_tp is not None and not df_final_tp.empty:
+        print("\n📸 === 【テスト確認】理論価格データ(df_final_tp)の先頭5行 ===")
+        print(df_final_tp.head(5).to_string())
+        print("=========================================================\n")
+        
+        print("\n📋 === 【ヘッダー最終確認: 理論価格】 ===")
+        print(f"現在の列一覧: {df_final_tp.columns.tolist()} ({len(df_final_tp.columns)}列)")
+        print("===========================================\n")
+
+    # --------------------------------------------------
+    # スプレッドシートへの書き込みフェーズ
+    # --------------------------------------------------
+    # IDと認証情報の両方がある場合のみ実行
     if SPREADSHEET_ID and os.environ.get("GOOGLE_CREDENTIALS"):
         try:
-            update_google_sheet(df_final, SPREADSHEET_ID)
+            # 建玉残高の書き込み（シート1に追記）
+            if df_final_oi is not None and not df_final_oi.empty:
+                print("→ 建玉残高データをスプレッドシートへ書き込みます。")
+                update_google_sheet(df_final_oi, SPREADSHEET_ID)
+                
+            # 理論価格の書き込み
+            # ※もし理論価格を別のシート（例: シート2）に書きたい場合は、
+            # update_google_sheet関数側でワークシートの指定(get_worksheet(1)など)を変更する必要があります
+            if df_final_tp is not None and not df_final_tp.empty:
+                print("→ 理論価格データをスプレッドシートへ書き込みます。")
+                update_google_sheet(df_final_tp, SPREADSHEET_ID)
+                
             print("【成功】すべての処理が正常に完了し、スプレッドシートに書き込まれました！")
+            
         except Exception as e:
             print(f"【エラー】スプレッドシートへの書き込み中に問題が発生しました: {e}")
             import sys
             sys.exit(1)
     else:
-        print("【判定】SPREADSHEET_ID または GOOGLE_CREDENTIALS が設定されていないため、書き込みをスキップしました。")
+        print("【判定】SPREADSHEET_ID または GOOGLE_CREDENTIALS が設定されていないため、書き込みをスキップしました（テストモード完了）。")
