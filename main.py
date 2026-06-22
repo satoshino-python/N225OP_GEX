@@ -12,7 +12,15 @@ import numpy as np
 from scipy.stats import norm  # 🌟 グリークス計算に必要な標準正規分布をインポート
 
 def get_target_date():
-    return "20260619"
+    # === 【本番用】自動で当日のJST日付を取得する場合 ===
+    # 1. まずUTCの現在時刻をタイムゾーン付きで安全に取得
+    utc_now = datetime.datetime.now(datetime.timezone.utc)
+    # 2. そこに時差9時間を加算して日本時間（JST）にする
+    jst_now = utc_now + datetime.timedelta(hours=9)
+    return jst_now.strftime("%Y%m%d")
+
+    # === 【テスト用】過去の特定日付を指定したい場合は以下を有効にしてください ===
+    # return "20260622"
 
 def download_jpx_data(date_str):
     print(f"--- JPXデータ取得開始: {date_str} ---")
