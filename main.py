@@ -299,19 +299,29 @@ def update_google_sheet(df, spreadsheet_id):
     sh = gc.open_by_key(spreadsheet_id)
     worksheet = sh.get_worksheet(0)
     
-    # 🌟 シートの現在の全データを取得して、空かどうかを確認する
+    # シートの現在の全データを取得
     existing_data = worksheet.get_all_values()
     
+    # 🌟 判定の強化：すべての行・セルの文字数をカウントし、本当に文字が1文字でもあるかチェック
+    #（[['']] のような空文字だけのリストを「空」とみなすようにします）
+    is_sheet_empty = True
+    if existing_data:
+        for row in existing_data:
+            # 行の中のセルの文字を結合して、空白を除いた長さを確認
+            if len("".join(row).strip()) > 0:
+                is_sheet_empty = False
+                break
+
     # DataFrameのデータをリスト形式に変換
     data_to_append = df.values.tolist()
     
-    if not existing_data or len(existing_data) == 0:
-        # 🌟 シートが完全に空なら、ヘッダー（列名）を先頭に結合して書き込む
+    if is_sheet_empty:
+        # 🌟 シートが実質的に空なら、ヘッダー（列名）を先頭に結合して書き込む
         header = [df.columns.tolist()]
         worksheet.append_rows(header + data_to_append)
-        print("シートが空だったため、ヘッダーとデータを書き込みました。")
+        print("シートが空であることを確認したため、ヘッダーとデータを書き込みました。")
     else:
-        # すでにデータ（またはヘッダー）が存在する場合は、データのみを追記する
+        # すでに文字データが存在する場合は、データのみを追記する
         worksheet.append_rows(data_to_append)
         print("既存のデータがあるため、データのみを追記しました。")
 
