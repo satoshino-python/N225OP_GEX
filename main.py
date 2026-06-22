@@ -298,8 +298,22 @@ def update_google_sheet(df, spreadsheet_id):
     gc = gspread.authorize(credentials)
     sh = gc.open_by_key(spreadsheet_id)
     worksheet = sh.get_worksheet(0)
+    
+    # 🌟 シートの現在の全データを取得して、空かどうかを確認する
+    existing_data = worksheet.get_all_values()
+    
+    # DataFrameのデータをリスト形式に変換
     data_to_append = df.values.tolist()
-    worksheet.append_rows(data_to_append)
+    
+    if not existing_data or len(existing_data) == 0:
+        # 🌟 シートが完全に空なら、ヘッダー（列名）を先頭に結合して書き込む
+        header = [df.columns.tolist()]
+        worksheet.append_rows(header + data_to_append)
+        print("シートが空だったため、ヘッダーとデータを書き込みました。")
+    else:
+        # すでにデータ（またはヘッダー）が存在する場合は、データのみを追記する
+        worksheet.append_rows(data_to_append)
+        print("既存のデータがあるため、データのみを追記しました。")
 
 if __name__ == "__main__":
     if "pip" in sys.argv: pass 
