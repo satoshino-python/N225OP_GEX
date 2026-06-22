@@ -23,7 +23,7 @@ jobs:
     - name: 必要なライブラリのインストール
       run: |
         python -m pip install --upgrade pip
-        pip install requests pandas openpyxl gspread google-auth numpy scipy matplotlib japanize-matplotlib
+        pip install requests pandas openpyxl gspread google-auth numpy scipy matplotlib japanize-matplotlib plotly
 
     - name: スクリプトの実行
       env:

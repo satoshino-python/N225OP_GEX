@@ -205,23 +205,52 @@ else:
     col1.metric("基準原資産価格 (先物決済値)", f"{underlying_price:,.1f} 円")
     col2.metric("総データ行数 (Strike数)", f"{len(gex_summary)} 行")
     
-    # 4. Matplotlibによるグラフ描画
+    # 4. Plotlyによるインタラクティブなグラフ描画 🌟
     st.subheader(f"📈 ガンマエクスポージャープロット - {selected_month} 限月")
     
-    fig, ax = plt.subplots(figsize=(12, 5))
-    colors = ['#1f77b4' if val >= 0 else '#d62728' for val in gex_summary.values]
+    # データの整形
+    df_plot = gex_summary.reset_index()
+    df_plot["方向"] = df_plot["GEX(億円)"].apply(lambda x: "Call優勢 (Long Gamma)" if x >= 0 else "Put優勢 (Short Gamma)")
     
-    ax.bar(gex_summary.index, gex_summary.values, color=colors, width=200, edgecolor='black', alpha=0.8)
-    ax.axvline(x=underlying_price, color='green', linestyle='--', linewidth=1.5, label=f'原資産価格: {underlying_price:,.0f}')
+    # Plotlyでインタラクティブな棒グラフを作成
+    import plotly.express as px
     
-    ax.set_xlabel("権利行使価格 (Strike)")
-    ax.set_ylabel("GEX (億円 / 1% 変動あたり)")
-    ax.grid(True, linestyle=':', alpha=0.6)
-    ax.legend(loc="upper left")
-    ax.set_xlim(underlying_price * 0.90, underlying_price * 1.10)
+    fig = px.bar(
+        df_plot,
+        x="権利行使価格",
+        y="GEX(億円)",
+        color="方向",
+        color_discrete_map={"Call優勢 (Long Gamma)": "#1f77b4", "Put優勢 (Short Gamma)": "#d62728"},
+        labels={"権利行使価格": "権利行使価格 (Strike)", "GEX(億円)": "GEX (億円 / 1%変動あたり)"},
+        hover_data={"権利行使価格": ":,d", "GEX(億円)": ":,.2f", "方向": False} # ホバー時の数値フォーマット
+    )
     
-    # Streamlitにグラフをレンダリング
-    st.pyplot(fig)
+    # グラフのレイアウト調整（原資産価格の垂直線やグリッドを追加）
+    fig.update_layout(
+        xaxis_range=[underlying_price * 0.90, underlying_price * 1.10], # 原資産の±10%にフォーカス
+        hovermode="x unified", # マウスを合わせたX軸の全データを一括表示
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=20, r=20, t=30, b=20),
+        plot_bgcolor="rgba(0,0,0,0)" # 背景を透過してスッキリさせる
+    )
+    
+    # X軸とY軸のグリッド線などの装飾
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='LightPink', dtick=500) # 500円刻みで補助線
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
+    
+    # 基準原資産価格（先物価格）の垂直点線を追加
+    fig.add_vline(
+        x=underlying_price, 
+        line_width=2, 
+        line_dash="dash", 
+        line_color="green",
+        annotation_text=f"原資産価格: {underlying_price:,.0f}円",
+        annotation_position="top left"
+    )
+    
+    # Streamlit専用の関数でPlotlyを出力（横幅いっぱいに広げる設定）
+    st.plotly_chart(fig, use_container_width=True)
     
     # 5. 下部に生データテーブルを表示
     st.subheader("📋 算出データ詳細テーブル")
