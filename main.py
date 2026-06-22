@@ -11,6 +11,17 @@ import sys
 import numpy as np
 from scipy.stats import norm  # 🌟 グリークス計算に必要な標準正規分布をインポート
 
+# 📊 グラフ描画用のライブラリを追加
+import matplotlib
+matplotlib.use('Agg')  # GUIのないサーバー環境（GitHub Actions等）でも動くように設定
+import matplotlib.pyplot as plt
+
+# 日本語文字化け対策（入っていない場合はフォント設定をマニュアル指定にフォールバック）
+try:
+    import japanize_matplotlib
+except ImportError:
+    pass
+
 def get_target_date():
     # === 【本番用】自動で当日のJST日付を取得する場合 ===
     # 1. まずUTCの現在時刻をタイムゾーン付きで安全に取得
@@ -24,7 +35,7 @@ def get_target_date():
 
 def download_jpx_data(date_str):
     print(f"--- JPXデータ取得開始: {date_str} ---")
-    oi_url = f"https://www.jpx.co.jp/markets/derivatives/trading-volume/tvdivq00000014nn-att/{date_str}open_interest.xlsx"
+    oi_url = f"https://www.jpx.co.jp/markets/derivatives/trading-volume/tvdivq00000014nn-att/{date_stropen_interest.xlsx"
     tp_url = f"https://www.jpx.co.jp/automation/markets/derivatives/option-price/files/ose{date_str}tp.csv"
     settlement_url = f"https://www.jpx.co.jp/markets/derivatives/settlement-price/tvdivq00000014l6-att/rb{date_str}.csv"
     
@@ -103,46 +114,34 @@ def extract_greeks_inputs(df_settle):
         print(f"⚠️ インプットデータ抽出中にエラーが発生しました: {e}")
         return pd.DataFrame()
 
-# 🌟 2. 新規追加：Black-Scholesモデルによるグリークス計算関数
 def calculate_greeks(row):
-    """
-    1行ずつのデータからデルタ、ガンマ、ベガ、セータを算出して返す関数
-    """
     S = row["原資産価格_S"]
     K = row["権利行使価格"]
     D = row["残存日数_D"]
-    r = row["金利_r"] / 100.0  # %表記を小数に変換
+    r = row["金利_r"] / 100.0
     v = row["ボラティリティ"] 
     option_type = row["プットコール種別"]
     
-    # 残存日数が0またはボラティリティが0の場合は計算不可のため初期値を返す
     if D <= 0 or v <= 0:
         return pd.Series([0.0, 0.0, 0.0, 0.0])
         
-    T = D / 365.0  # 年換算
+    T = D / 365.0
     
-    # Black-Scholesのd1, d2の計算
     d1 = (np.log(S / K) + (r + 0.5 * v ** 2) * T) / (v * np.sqrt(T))
     d2 = d1 - v * np.sqrt(T)
     
-    # 確率密度関数(pdf)と累積分布関数(cdf)
     pdf_d1 = norm.pdf(d1)
     cdf_d1 = norm.cdf(d1)
     cdf_d2 = norm.cdf(d2)
     
-    # 1. デルタ ($\Delta$) の計算
     if option_type == "call":
         delta = cdf_d1
     else:
         delta = cdf_d1 - 1.0
         
-    # 2. ガンマ ($\Gamma$) の計算（コール・プット共通）
     gamma = pdf_d1 / (S * v * np.sqrt(T))
-    
-    # 3. ベガ ($\mathcal{V}$) の計算（1%の変化に対応するため100で割るのが一般的）
     vega = (S * np.sqrt(T) * pdf_d1) / 100.0
     
-    # 4. セータ ($\Theta$) の計算（1日あたりの減少に直すため365で割る）
     if option_type == "call":
         theta = (- (S * v * pdf_d1) / (2 * np.sqrt(T)) - r * K * np.exp(-r * T) * cdf_d2) / 365.0
     else:
@@ -244,6 +243,53 @@ def process_tp_data(df_tp):
 
     return df_final_tp
 
+# 🌟 新規追加：ガンマエクスポージャーのグラフ生成・保存関数
+def generate_gex_plots(df_merged):
+    print("--- ガンマエクスポージャー（GEX）のグラフを生成します ---")
+    unique_months = sorted(df_merged["限月"].unique())
+    
+    for month in unique_months:
+        df_month = df_merged[df_merged["限月"] == month].copy()
+        
+        # 権利行使価格ごとにGEXを合算（Call GEX - Put GEX がすでに計算されて集約されている状態を作る）
+        # 横軸を権利行使価格にするため、Strikeごとの合計値を算出
+        gex_summary = df_month.groupby("権利行使価格")["GEX(億円)"].sum().sort_index()
+        
+        if gex_summary.empty:
+            continue
+            
+        # その限月の基準原資産価格（先物価格）を取得
+        underlying_price = df_month["原資産価格_S"].iloc[0]
+        
+        # プロットエリアの設定
+        plt.figure(figsize=(12, 6))
+        
+        # プラスとマイナスで色分けする（プラスは青、マイナスは赤）
+        colors = ['#1f77b4' if val >= 0 else '#d62728' for val in gex_summary.values]
+        
+        # 棒グラフの描画
+        plt.bar(gex_summary.index, gex_summary.values, color=colors, width=200, edgecolor='black', alpha=0.8)
+        
+        # 基準となる原資産価格（現価格）に垂直の点線を引く
+        plt.axvline(x=underlying_price, color='green', linestyle='--', linewidth=1.5, label=f'原資産価格 (先物): {underlying_price:,.0f}')
+        
+        # グラフの装飾
+        plt.title(f"日経225オプション ガンマエクスポージャー (GEX) - 限月: {month}", fontsize=14, fontweight='bold')
+        plt.xlabel("権利行使価格 (Strike)", fontsize=12)
+        plt.ylabel("GEX (億円 / 原資産1%変動あたり)", fontsize=12)
+        plt.grid(True, linestyle=':', alpha=0.6)
+        plt.legend(loc="upper left")
+        
+        # グラフのX軸範囲を原資産価格の±10%程度に絞って見やすくする
+        plt.xlim(underlying_price * 0.90, underlying_price * 1.10)
+        
+        # 画像としてローカル環境に保存
+        filename = f"gex_chart_{month}.png"
+        plt.tight_layout()
+        plt.savefig(filename, dpi=150)
+        plt.close()
+        print(f"✨ グラフ画像を保存しました: {filename}")
+
 def update_google_sheet(df, spreadsheet_id):
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
     google_creds_env = os.environ.get("GOOGLE_CREDENTIALS")
@@ -256,8 +302,7 @@ def update_google_sheet(df, spreadsheet_id):
     worksheet.append_rows(data_to_append)
 
 if __name__ == "__main__":
-    # 環境変数からシークレット等を取得
-    if "pip" in sys.argv: pass # ライブラリ導入はActions側で行うため省略
+    if "pip" in sys.argv: pass 
     
     SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
     GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
@@ -269,7 +314,6 @@ if __name__ == "__main__":
         print("【判定】データが取得できなかったため、処理を終了します。")
         sys.exit(1)
 
-    # グリークス計算用インプットの抽出
     df_greeks_inputs = extract_greeks_inputs(df_settle)
 
     df_final_oi = process_data(df_oi, df_tp)
@@ -283,27 +327,35 @@ if __name__ == "__main__":
         join_keys = ["取得日", "プットコール種別", "限月", "権利行使価格"]
         df_merged = pd.merge(df_final_tp, df_final_oi, on=join_keys, how="inner")
         
-        # 🌟 3. 新規追加：グリークスインプットの結合とBlack-Scholes計算の実行
         if not df_greeks_inputs.empty:
             print("--- グリークス計算インプットを結合し、Black-Scholes指標を算出します ---")
-            # 限月キーでインプット（原資産価格_S, 金利_r, 残存日数_D）をマージ
             df_merged = pd.merge(df_merged, df_greeks_inputs, on=["限月"], how="inner")
             
-            # 各行に対して一括計算を適用
+            # 各行に対して一括計算を適用（デルタ、ガンマ、ベガ、セータ）
             df_merged[["デルタ", "ガンマ", "ベガ", "セータ"]] = df_merged.apply(calculate_greeks, axis=1)
             
-            # 元々の「原資産終値」列を清算数値から引っ張ってきた正確な「原資産価格_S」で置き換える
+            # 🌟 新規追加：ガンマエクスポージャー（GEX）の計算
+            # マーケットメーカー売り越し前提：Callはプラス、Putはマイナス符号を乗じる
+            # GEX ＝ ガンマ * 当日建玉残高 * 乗数(1000) * 原資産価格_S * 1%
+            # 金額が大きくなるため、100,000,000(1億円)で割って「億円単位」に変換
+            df_merged["GEX符号"] = df_merged["プットコール種別"].map({"call": 1.0, "put": -1.0})
+            df_merged["GEX_raw"] = df_merged["ガンマ"] * df_merged["当日建玉残高"] * 1000 * df_merged["原資産価格_S"] * 0.01 * df_merged["GEX符号"]
+            df_merged["GEX(億円)"] = df_merged["GEX_raw"] / 100000000.0
+            
+            # 🌟 新規追加：GEXグラフ画像の生成処理をキック
+            generate_gex_plots(df_merged)
+            
             df_merged["原資産終値"] = df_merged["原資産価格_S"]
             
-            # 格納・出力する列順をグリークスを含めた形に再定義
+            # 格納・出力する列順を再定義（GEXを追加）
             final_columns_order = [
                 "取得日", "プットコール種別", "限月", "権利行使価格", 
                 "理論価格", "ボラティリティ", "原資産終値", 
                 "取引高", "当日建玉残高", "前日比", "前日建玉残高",
-                "デルタ", "ガンマ", "ベガ", "セータ"
+                "デルタ", "ガンマ", "ベガ", "セータ", "GEX(億円)"
             ]
             df_merged = df_merged[final_columns_order].copy()
-            print(f"グリークス計算完了: {len(df_merged)} 行の拡張データを生成しました。")
+            print(f"グリークス・GEX計算完了: {len(df_merged)} 行の拡張データを生成しました。")
         else:
             print("⚠️ グリークスインプットが空のため、計算をスキップして基本項目のみで続行します。")
             final_columns_order = [
@@ -315,7 +367,7 @@ if __name__ == "__main__":
 
     # 📝 スプレッドシートへの書き込みフェーズ
     if not df_merged.empty:
-        print("→ 統合データ（グリークス付き）をスプレッドシートへ書き込みます。")
+        print("→ 統合データ（グリークス・GEX付き）をスプレッドシートへ書き込みます。")
         try:
             update_google_sheet(df_merged, SPREADSHEET_ID)
             print("【成功】すべての処理が正常に完了し、スプレッドシートに書き込まれました！")
