@@ -204,39 +204,57 @@ else:
     col1, col2 = st.columns(2)
     col1.metric("基準原資産価格 (先物決済値)", f"{underlying_price:,.1f} 円")
     col2.metric("総データ行数 (Strike数)", f"{len(gex_summary)} 行")
-    
-    # 4. Plotlyによるインタラクティブなグラフ描画 🌟
+
+# 4. Plotlyによるインタラクティブなグラフ描画 🌟（Y軸データ1万倍版）
     st.subheader(f"📈 ガンマエクスポージャープロット - {selected_month} 限月")
     
     # データの整形
-    df_plot = gex_summary.reset_index()
-    df_plot["方向"] = df_plot["GEX(億円)"].apply(lambda x: "Call優勢 (Long Gamma)" if x >= 0 else "Put優勢 (Short Gamma)")
+    df_plot = df_month.copy()
     
-    # Plotlyでインタラクティブな棒グラフを作成
+    # 権利行使価格（Strike）ごとにGEXやガンマ、デルタを集計
+    df_grouped = df_plot.groupby("権利行使価格").agg({
+        "GEX(億円)": "sum",
+        "ガンマ": "mean",     # 同一Strikeの平均
+        "デルタ": "mean",     # 同一Strikeの平均
+        "当日建玉残高": "sum" # 枚数の合計
+    }).reset_index()
+    
+    # 🌟 GEX（億円）とガンマをあらかじめ10,000倍に変換して上書きします
+    df_grouped["GEX (億円×1万)"] = df_grouped["GEX(億円)"] * 10000
+    df_grouped["ガンマ (1万倍)"] = df_grouped["ガンマ"] * 10000
+    df_grouped["方向"] = df_grouped["GEX (億円×1万)"].apply(lambda x: "Call優勢 (Long Gamma)" if x >= 0 else "Put優勢 (Short Gamma)")
+    
     import plotly.express as px
     
+    # 縦軸（y）を 1万倍した「GEX (億円×1万)」に指定します
     fig = px.bar(
-        df_plot,
+        df_grouped,
         x="権利行使価格",
-        y="GEX(億円)",
+        y="GEX (億円×1万)",
         color="方向",
         color_discrete_map={"Call優勢 (Long Gamma)": "#1f77b4", "Put優勢 (Short Gamma)": "#d62728"},
-        labels={"権利行使価格": "権利行使価格 (Strike)", "GEX(億円)": "GEX (億円 / 1%変動あたり)"},
-        hover_data={"権利行使価格": ":,d", "GEX(億円)": ":,.2f", "方向": False} # ホバー時の数値フォーマット
+        labels={"権利行使価格": "権利行使価格 (Strike)", "GEX (億円×1万)": "GEX (億円 × 1万)"},
+        hover_data={
+            "権利行使価格": ":,d",
+            "GEX (億円×1万)": ":+,.0f",  # 1万倍されたGEXを符号付き整数でスッキリ表示
+            "当日建玉残高": ":,d",
+            "デルタ": ":,.2f",
+            "ガンマ (1万倍)": ":,.2f",
+            "方向": False
+        }
     )
     
-    # グラフのレイアウト調整（原資産価格の垂直線やグリッドを追加）
+    # グラフのレイアウト調整
     fig.update_layout(
-        xaxis_range=[underlying_price * 0.90, underlying_price * 1.10], # 原資産の±10%にフォーカス
-        hovermode="x unified", # マウスを合わせたX軸の全データを一括表示
+        xaxis_range=[underlying_price * 0.90, underlying_price * 1.10],
+        hovermode="x unified",
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=20, r=20, t=30, b=20),
-        plot_bgcolor="rgba(0,0,0,0)" # 背景を透過してスッキリさせる
+        plot_bgcolor="rgba(0,0,0,0)"
     )
     
-    # X軸とY軸のグリッド線などの装飾
-    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='LightPink', dtick=500) # 500円刻みで補助線
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='LightPink', dtick=500)
     fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
     
     # 基準原資産価格（先物価格）の垂直点線を追加
@@ -245,14 +263,19 @@ else:
         line_width=2, 
         line_dash="dash", 
         line_color="green",
-        annotation_text=f"原資産価格: {underlying_price:,.0f}円",
+        annotation_text=f"原資産: {underlying_price:,.0f}円",
         annotation_position="top left"
     )
     
-    # Streamlit専用の関数でPlotlyを出力（横幅いっぱいに広げる設定）
     st.plotly_chart(fig, use_container_width=True)
     
-    # 5. 下部に生データテーブルを表示
+    # 5. 下部に生データテーブルを表示 🌟（テーブル内のGEXも1万倍の列に変更）
     st.subheader("📋 算出データ詳細テーブル")
-    show_cols = ["プットコール種別", "権利行使価格", "理論価格", "ボラティリティ", "当日建玉残高", "デルタ", "ガンマ", "GEX(億円)"]
-    st.dataframe(df_month[show_cols].sort_values(by="権利行使価格"), use_container_width=True)
+    
+    # 表示用に元のデータフレームにも1万倍の列を追加
+    df_month_display = df_month.copy()
+    df_month_display["GEX (億円×1万)"] = df_month_display["GEX(億円)"] * 10000
+    df_month_display["ガンマ (1万倍)"] = df_month_display["ガンマ"] * 10000
+    
+    show_cols = ["プットコール種別", "権利行使価格", "理論価格", "ボラティリティ", "当日建玉残高", "デルタ", "ガンマ (1万倍)", "GEX (億円×1万)"]
+    st.dataframe(df_month_display[show_cols].sort_values(by="権利行使価格"), use_container_width=True)
