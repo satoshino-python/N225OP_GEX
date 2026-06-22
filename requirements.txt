@@ -1,5 +1,9 @@
 requests
 pandas
+numpy
+scipy
 openpyxl
 gspread
 google-auth
+streamlit
+plotly
