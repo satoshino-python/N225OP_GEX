@@ -7,7 +7,6 @@ from io import StringIO, BytesIO
 import re
 import datetime
 from scipy.stats import norm
-import japanize_matplotlib  # 日本語文字化け防止
 
 # ページの設定
 st.set_page_config(page_title="日経225オプション GEXダッシュボード", layout="wide")
