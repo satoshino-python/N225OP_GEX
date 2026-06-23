@@ -148,37 +148,69 @@ def process_tp_data(df_tp):
     return df_res
 
 # 🌟 データを一気につくって df_merged を返却するメイン関数
+# 🌟 データを一気につくって df_merged と「確定したデータ基準日」を返却するメイン関数
 @st.cache_data(ttl=3600)  # 1時間キャッシュして、アクセス毎のJPX負荷を減らす
 def load_and_calculate_all_data():
-    date_str = get_target_date()
-    df_oi_raw, df_tp_raw, df_settle_raw = download_jpx_data(date_str)
+    # 1. ベースとなる本日の日付（JST）を取得
+    utc_now = datetime.datetime.now(datetime.timezone.utc)
+    jst_now = utc_now + datetime.timedelta(hours=9)
     
-    if df_oi_raw is None or df_tp_raw is None:
-        return pd.DataFrame()
+    df_oi_raw, df_tp_raw, df_settle_raw = None, None, None
+    confirmed_date_str = ""
+    
+    # 2. 最大5日前まで自動で遡ってデータを探すループ
+    for i in range(5):
+        target_date = jst_now - datetime.timedelta(days=i)
+        date_str = target_date.strftime("%Y%m%d")
         
+        # 土日はJPXのデータ更新がないため最初からスキップして高速化
+        if target_date.weekday() in [5, 6]:  # 5=土曜, 6=日曜
+            continue
+            
+        # JPXから3つのデータをダウンロード試行
+        df_oi_raw, df_tp_raw, df_settle_raw = download_jpx_data(date_str)
+        
+        # 3つのデータがすべて正常に揃ったら、その日付で確定してループを抜ける
+        if df_oi_raw is not None and df_tp_raw is not None and df_settle_raw is not None:
+            confirmed_date_str = target_date.strftime("%Y/%m/%d")
+            break
+            
+    # 全て遡ってもデータが1つも見つからなかった場合は空のデータフレームと空文字を返す
+    if df_oi_raw is None or df_tp_raw is None or df_settle_raw is None:
+        return pd.DataFrame(), ""
+        
+    # 3. 確定したデータを使用したパース・計算処理
     df_greeks_inputs = extract_greeks_inputs(df_settle_raw)
     df_final_oi = process_data(df_oi_raw)
     df_final_tp = process_tp_data(df_tp_raw)
     
     if df_final_oi.empty or df_final_tp.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), ""
         
+    # 建玉データと理論価格データのインナーマージ
     df_final_oi["限月"] = pd.to_numeric("20" + df_final_oi["限月"].astype(str), errors='coerce').fillna(0).astype(int)
     df_merged = pd.merge(df_final_tp, df_final_oi, on=["プットコール種別", "限月", "権利行使価格"], how="inner")
     
+    # グリークス計算インプットの結合とBlack-Scholes指標の算出
     if not df_greeks_inputs.empty:
         df_merged["限月"] = df_merged["限月"].astype(int)
         df_greeks_inputs["限月"] = df_greeks_inputs["限月"].astype(int)
         df_merged = pd.merge(df_merged, df_greeks_inputs, on=["限月"], how="inner")
         
         if not df_merged.empty:
+            # 各行に対して一括計算を適用（デルタ、ガンマ、ベガ、セータ）
             df_merged[["デルタ", "ガンマ", "ベガ", "セータ"]] = df_merged.apply(calculate_greeks, axis=1)
+            
+            # ガンマエクスポージャー（GEX）の計算
+            # マーケットメーカー売り越し前提：Callはプラス、Putはマイナス符号を乗じる
             df_merged["GEX符号"] = df_merged["プットコール種別"].map({"call": 1.0, "put": -1.0})
             df_merged["GEX_raw"] = df_merged["ガンマ"] * df_merged["当日建玉残高"] * 1000 * df_merged["原資産価格_S"] * 0.01 * df_merged["GEX符号"]
             df_merged["GEX(億円)"] = df_merged["GEX_raw"] / 100000000.0
-            return df_merged
             
-    return pd.DataFrame()
+            # 計算済みのデータフレームと確定した日付文字列をセットで返却
+            return df_merged, confirmed_date_str
+            
+    return pd.DataFrame(), ""
 
 # --- 🚀 Streamlit 画面表示フェーズ ---
 st.title("📊 日経225オプション ガンマエクスポージャー (GEX) ダッシュボード")
