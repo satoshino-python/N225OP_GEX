@@ -215,98 +215,107 @@ def load_and_calculate_all_data():
 # --- 🚀 Streamlit 画面表示フェーズ ---
 st.title("📊 日経225オプション ガンマエクスポージャー (GEX) ダッシュボード")
 
-# 1. データの読み込み（ここで df_merged を安全に構築します）
+# 1. データの読み込み
 with st.spinner("JPXから最新データを取得し、GEXを計算中..."):
-    df_merged = load_and_calculate_all_data()
+    result = load_and_calculate_all_data()
 
-if df_merged.empty:
-    st.error("データの取得、またはマージに失敗しました。本日のデータがJPX側でまだ更新されていない可能性があります。")
+# データの受け取りと安全チェック
+if result is None or not isinstance(result, tuple) or len(result) < 2:
+    st.error("⚠️ データの初期化に失敗しました。アプリのキャッシュをクリアするか再起動してください。")
 else:
-    # 2. 限月選択ボックスの配置
-    unique_months = sorted(df_merged["限月"].unique())
-    selected_month = st.sidebar.selectbox("表示する限月を選択してください", unique_months)
-    
-    # 選択された限月のデータを抽出
-    df_month = df_merged[df_merged["限月"] == selected_month].copy()
-    gex_summary = df_month.groupby("権利行使価格")["GEX(億円)"].sum().sort_index()
-    underlying_price = df_month["原資産価格_S"].iloc[0]
-    
-    # 3. 画面上に現在の主要な数値を配置 (メトリクス表示)
-    col1, col2 = st.columns(2)
-    col1.metric("基準原資産価格 (先物決済値)", f"{underlying_price:,.1f} 円")
-    col2.metric("総データ行数 (Strike数)", f"{len(gex_summary)} 行")
+    df_merged, data_date = result
 
-# 4. Plotlyによるインタラクティブなグラフ描画 🌟（Y軸データ1万倍版）
-    st.subheader(f"📈 ガンマエクスポージャープロット - {selected_month} 限月")
-    
-    # データの整形
-    df_plot = df_month.copy()
-    
-    # 権利行使価格（Strike）ごとにGEXやガンマ、デルタを集計
-    df_grouped = df_plot.groupby("権利行使価格").agg({
-        "GEX(億円)": "sum",
-        "ガンマ": "mean",     # 同一Strikeの平均
-        "デルタ": "mean",     # 同一Strikeの平均
-        "当日建玉残高": "sum" # 枚数の合計
-    }).reset_index()
-    
-    # 🌟 GEX（億円）とガンマをあらかじめ10,000倍に変換して上書きします
-    df_grouped["GEX (億円×1万)"] = df_grouped["GEX(億円)"] * 10000
-    df_grouped["ガンマ (1万倍)"] = df_grouped["ガンマ"] * 10000
-    df_grouped["方向"] = df_grouped["GEX (億円×1万)"].apply(lambda x: "Call優勢 (Long Gamma)" if x >= 0 else "Put優勢 (Short Gamma)")
-    
-    import plotly.express as px
-    
-    # 縦軸（y）を 1万倍した「GEX (億円×1万)」に指定します
-    fig = px.bar(
-        df_grouped,
-        x="権利行使価格",
-        y="GEX (億円×1万)",
-        color="方向",
-        color_discrete_map={"Call優勢 (Long Gamma)": "#1f77b4", "Put優勢 (Short Gamma)": "#d62728"},
-        labels={"権利行使価格": "権利行使価格 (Strike)", "GEX (億円×1万)": "GEX (億円 × 1万)"},
-        hover_data={
-            "権利行使価格": ":,d",
-            "GEX (億円×1万)": ":+,.0f",  # 1万倍されたGEXを符号付き整数でスッキリ表示
-            "当日建玉残高": ":,d",
-            "デルタ": ":,.2f",
-            "ガンマ (1万倍)": ":,.2f",
-            "方向": False
-        }
-    )
-    
-    # グラフのレイアウト調整
-    fig.update_layout(
-        xaxis_range=[underlying_price * 0.90, underlying_price * 1.10],
-        hovermode="x unified",
-        showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=30, b=20),
-        plot_bgcolor="rgba(0,0,0,0)"
-    )
-    
-    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='LightPink', dtick=500)
-    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
-    
-    # 基準原資産価格（先物価格）の垂直点線を追加
-    fig.add_vline(
-        x=underlying_price, 
-        line_width=2, 
-        line_dash="dash", 
-        line_color="green",
-        annotation_text=f"原資産: {underlying_price:,.0f}円",
-        annotation_position="top left"
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # 5. 下部に生データテーブルを表示 🌟（テーブル内のGEXも1万倍の列に変更）
-    st.subheader("📋 算出データ詳細テーブル")
-    
-    # 表示用に元のデータフレームにも1万倍の列を追加
-    df_month_display = df_month.copy()
-    df_month_display["GEX (億円×1万)"] = df_month_display["GEX(億円)"] * 10000
-    df_month_display["ガンマ (1万倍)"] = df_month_display["ガンマ"] * 10000
-    
-    show_cols = ["プットコール種別", "権利行使価格", "理論価格", "ボラティリティ", "当日建玉残高", "デルタ", "ガンマ (1万倍)", "GEX (億円×1万)"]
-    st.dataframe(df_month_display[show_cols].sort_values(by="権利行使価格"), use_container_width=True)
+    # 🌟 修正ポイント：過去5日遡っても本当にデータが1件もない場合のみエラーを出す
+    if df_merged is None or df_merged.empty or not data_date:
+        st.error("❌ 直近5日分のデータがJPX（日本取引所グループ）側で見つかりませんでした。")
+        st.info("土日祝日やシステムメンテナンス、またはURL構造の変更が発生している可能性があります。時間をおいて再度お試しください。")
+    else:
+        # 2. 限月選択ボックスの配置
+        unique_months = sorted(df_merged["限月"].unique())
+        selected_month = st.sidebar.selectbox("表示する限月を選択してください", unique_months)
+        
+        # 🌟 サイドバーに取得できた最新データの基準日を分かりやすく明示
+        st.sidebar.info(f"📅 データ基準日: {data_date}")
+        
+        # 選択された限月のデータを抽出
+        df_month = df_merged[df_merged["限月"] == selected_month].copy()
+        gex_summary = df_month.groupby("権利行使価格")["GEX(億円)"].sum().sort_index()
+        underlying_price = df_month["原資産価格_S"].iloc[0]
+        
+        # 3. 画面上に現在の主要な数値を配置
+        col1, col2, col3 = st.columns(3)
+        col1.metric("データ基準日", data_date)  # 今日がなければ前営業日の日付が自動でここに入ります
+        col2.metric("基準原資産価格 (先物決済値)", f"{underlying_price:,.1f} 円")
+        col3.metric("総データ行数 (Strike数)", f"{len(gex_summary)} 行")
+
+        # 4. Plotlyによるインタラクティブなグラフ描画
+        st.subheader(f"📈 ガンマエクスポージャープロット - {selected_month} 限月 ({data_date} 基準)")
+        
+        # データの整形
+        df_plot = df_month.copy()
+        
+        # 権利行使価格（Strike）ごとにGEXやガンマ、デルタを集計
+        df_grouped = df_plot.groupby("権利行使価格").agg({
+            "GEX(億円)": "sum",
+            "ガンマ": "mean",     
+            "デルタ": "mean",     
+            "当日建玉残高": "sum" 
+        }).reset_index()
+        
+        # GEX（億円）とガンマを10,000倍に変換
+        df_grouped["GEX (億円×1万)"] = df_grouped["GEX(億円)"] * 10000
+        df_grouped["ガンマ (1万倍)"] = df_grouped["ガンマ"] * 10000
+        df_grouped["方向"] = df_grouped["GEX (億円×1万)"].apply(lambda x: "Call優勢 (Long Gamma)" if x >= 0 else "Put優勢 (Short Gamma)")
+        
+        import plotly.express as px
+        
+        fig = px.bar(
+            df_grouped,
+            x="権利行使価格",
+            y="GEX (億円×1万)",
+            color="方向",
+            color_discrete_map={"Call優勢 (Long Gamma)": "#1f77b4", "Put優勢 (Short Gamma)": "#d62728"},
+            labels={"権利行使価格": "権利行使価格 (Strike)", "GEX (億円×1万)": "GEX (億円 × 1万)"},
+            hover_data={
+                "権利行使価格": ":,d",
+                "GEX (億円×1万)": ":+,.0f",  
+                "当日建玉残高": ":,d",
+                "デルタ": ":,.2f",
+                "ガンマ (1万倍)": ":,.2f",
+                "方向": False
+            }
+        )
+        
+        # グラフのレイアウト調整
+        fig.update_layout(
+            xaxis_range=[underlying_price * 0.90, underlying_price * 1.10],
+            hovermode="x unified",
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=20, r=20, t=30, b=20),
+            plot_bgcolor="rgba(0,0,0,0)"
+        )
+        
+        fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='LightPink', dtick=500)
+        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
+        
+        fig.add_vline(
+            x=underlying_price, 
+            line_width=2, 
+            line_dash="dash", 
+            line_color="green",
+            annotation_text=f"原資産: {underlying_price:,.0f}円",
+            annotation_position="top left"
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # 5. 下部に生データテーブルを表示
+        st.subheader("📋 算出データ詳細テーブル")
+        
+        df_month_display = df_month.copy()
+        df_month_display["GEX (億円×1万)"] = df_month_display["GEX(億円)"] * 10000
+        df_month_display["ガンマ (1万倍)"] = df_month_display["ガンマ"] * 10000
+        
+        show_cols = ["プットコール種別", "権利行使価格", "理論価格", "ボラティリティ", "当日建玉残高", "デルタ", "ガンマ (1万倍)", "GEX (億円×1万)"]
+        st.dataframe(df_month_display[show_cols].sort_values(by="権利行使価格"), use_container_width=True)
