@@ -259,21 +259,26 @@ else:
         # データの整形
         df_plot = df_month.copy()
         
-        # 権利行使価格（Strike）ごとにGEXやガンマ、デルタを集計
+        # 🌟 建玉残高もCall（プラス）とPut（マイナス）で相殺するための符号付き列を作成
+        df_plot["建玉残高符号"] = df_plot["プットコール種別"].map({"call": 1, "put": -1})
+        df_plot["ネット当日建玉残高"] = df_plot["当日建玉残高"] * df_plot["建玉残高符号"]
+        
+        # 権利行使価格（Strike）ごとに厳密に集計（Call/Putを相殺）
         df_grouped = df_plot.groupby("権利行使価格").agg({
             "GEX(億円)": "sum",
-            "ガンマ": "mean",     
-            "デルタ": "mean",     
-            "当日建玉残高": "sum" 
+            "ガンマ": "mean",     # 同一Strikeの平均
+            "デルタ": "mean",     # 同一Strikeの平均
+            "ネット当日建玉残高": "sum" # 🌟 ここでCallとPutが相殺された純粋な残り枚数（差分）になります
         }).reset_index()
         
-        # GEX（億円）とガンマを10,000倍に変換
+        # GEX（億円）とガンマをあらかじめ10,000倍に変換して上書き
         df_grouped["GEX (億円×1万)"] = df_grouped["GEX(億円)"] * 10000
         df_grouped["ガンマ (1万倍)"] = df_grouped["ガンマ"] * 10000
         df_grouped["方向"] = df_grouped["GEX (億円×1万)"].apply(lambda x: "Call優勢 (Long Gamma)" if x >= 0 else "Put優勢 (Short Gamma)")
         
         import plotly.express as px
         
+        # 縦軸（y）を 1万倍した「GEX (億円×1万)」に指定
         fig = px.bar(
             df_grouped,
             x="権利行使価格",
@@ -284,7 +289,7 @@ else:
             hover_data={
                 "権利行使価格": ":,d",
                 "GEX (億円×1万)": ":+,.0f",  
-                "当日建玉残高": ":,d",
+                "ネット当日建玉残高": ":+,.0f",  # 🌟 符号付き（+や-）の相殺後枚数としてスッキリ表示
                 "デルタ": ":,.2f",
                 "ガンマ (1万倍)": ":,.2f",
                 "方向": False
