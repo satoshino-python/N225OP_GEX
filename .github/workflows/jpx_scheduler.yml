@@ -2,8 +2,8 @@ name: JPX Options Data Automator
 
 on:
   schedule:
-    # 毎日日本時間 21:23 (UTC 12:23) に実行
-    - cron: '23 12 * * *'
+    # 毎日日本時間 20:13 (UTC 11:13) に実行
+    - cron: '13 11 * * *'
   workflow_dispatch: # ボタンを押して手動で今すぐ実行することも可能にする設定
 
 jobs:
