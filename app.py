@@ -93,7 +93,7 @@ def process_data(df_oi):
     # 割り当てたい正しい列名の定義
     temp_columns = ["限月取引", "取引高", "当日建玉残高", "前日比", "前日建玉残高"]
     
-    # 🌟 main.py と同じ確実な列名上書き方法に修正
+    # main.py と同じ確実な列名上書き方法に修正
     df_put = df_oi.iloc[:, [0, 1, 2, 3, 4]].copy()
     df_put.columns = temp_columns
     
@@ -103,9 +103,14 @@ def process_data(df_oi):
     # 結合して前後の空白を除去
     df_combined = pd.concat([df_put, df_call], ignore_index=True)
     
-    # 🌟 これで確実に '限月取引' 列が存在するため、エラーにならず通過します
     df_combined["限月取引"] = df_combined["限月取引"].astype(str).str.strip()
-    df_combined = df_combined[df_combined["限月取引"].str.contains("NIKKEI", na=False, case=False) & ~df_combined["限月取引"].str.contains("合計", na=False)]
+    
+    # 🌟 修正ポイント：'NIKKEI' を含み、かつ 'MINI' と '合計' を「含まない」行だけを厳密に抽出
+    df_combined = df_combined[
+        df_combined["限月取引"].str.contains("NIKKEI", na=False, case=False) & 
+        ~df_combined["限月取引"].str.contains("MINI", na=False, case=False) & 
+        ~df_combined["限月取引"].str.contains("合計", na=False)
+    ]
     
     # 正規表現でスライス
     extracted = df_combined["限月取引"].str.extract(r"NIKKEI\s*225\s*([PC])(\d{4})-(\d+)", flags=re.IGNORECASE)
