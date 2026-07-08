@@ -86,8 +86,10 @@ def extract_greeks_inputs(df_settle):
         df_filtered = df_filtered[df_filtered[3].isin(target_months)]
         df_filtered["調整残存日数"] = df_filtered[10] - 1
         df_filtered["調整残存日数"] = df_filtered["調整残存日数"].clip(lower=0)
+        
+        # 🌟 修正：限月をここで「文字列型」として保持
         df_inputs = pd.DataFrame({
-            "限月": df_filtered[3].astype(int),
+            "限月": df_filtered[3].astype(int).astype(str),
             "原資産価格_S": df_filtered[7].astype(float),
             "金利_r": df_filtered[9].astype(float),
             "残存日数_D": df_filtered["調整残存日数"].astype(int)
@@ -195,26 +197,24 @@ def process_tp_data(df_tp):
     df_final_tp = df_tp_combined[final_cols].copy()
     df_final_tp["理論価格"] = pd.to_numeric(df_final_tp["理論価格"].astype(str).str.replace(r'[\s,]', '', regex=True).replace('-', '0'), errors='coerce').fillna(0).astype(float)
     df_final_tp["ボラティリティ"] = pd.to_numeric(df_final_tp["ボラティリティ"].astype(str).str.replace(r'[\s,]', '', regex=True).replace('-', '0'), errors='coerce').fillna(0).astype(float)
-    df_final_tp["限月"] = df_final_tp["限月"].astype(int)
+    
+    # 🌟 修正：限月をここで「文字列型」として保持
+    df_final_tp["限月"] = df_final_tp["限月"].astype(int).astype(str)
     df_final_tp["権利行使価格"] = df_final_tp["権利行使価格"].astype(int)
     return df_final_tp
 
-# 🌟 変更箇所：選ばれたターゲット（文字列）を元に、型エラーを起こさず安全にデータ抽出して描画する関数
+# 🌟 変更箇所：選ばれたターゲット（文字列）を元に、文字列比較で安全にデータ抽出して描画する関数
 def generate_gex_plots(df_merged, selected_target):
     print(f"--- ガンマエクスポージャー（GEX）のグラフを生成します: {selected_target} ---")
-    unique_months = sorted(df_merged["限月"].unique())
-    
-    # 型不一致バグを防ぐため、比較用の一時的な文字列列を作成
-    df_work = df_merged.copy()
-    df_work["限月_str"] = df_work["限月"].astype(int).astype(str)
+    unique_months = sorted(df_merged["限月"].unique()) # 最初から文字列のリスト
     
     if selected_target == "直近3限月合計":
-        df_plot = df_work.copy()  # フィルタをかけずに全データをそのまま合算対象にする
+        df_plot = df_merged.copy()  # 全データをそのまま合算対象にする
         title_str = "直近3限月合計"
-        underlying_price = df_work[df_work["限月"] == unique_months[0]]["原資産価格_S"].iloc[0]
+        underlying_price = df_merged[df_merged["限月"] == unique_months[0]]["原資産価格_S"].iloc[0]
     else:
-        # 文字列同士（'202606' == '202606'）で確実に比較抽出
-        df_plot = df_work[df_work["限月_str"] == selected_target].copy()
+        # 🌟 元から双方とも文字列型なので、キャストなしで100%安全に直接比較抽出可能
+        df_plot = df_merged[df_merged["限月"] == selected_target].copy()
         title_str = f"限月: {selected_target}"
         underlying_price = df_plot["原資産価格_S"].iloc[0]
         
@@ -267,7 +267,6 @@ def update_google_sheet(df, spreadsheet_id):
 if __name__ == "__main__":
     if "pip" in sys.argv: pass 
     
-    # Webページのタイトルを設定
     st.title("日経225オプション GEXアナリティクス")
     
     SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
@@ -287,7 +286,8 @@ if __name__ == "__main__":
     df_merged = pd.DataFrame()
     
     if (df_final_oi is not None and not df_final_oi.empty) and (df_final_tp is not None and not df_final_tp.empty):
-        df_final_oi["限月"] = pd.to_numeric("20" + df_final_oi["限月"].astype(str), errors='coerce').fillna(0).astype(int)
+        # 🌟 修正：OIデータの限月もマージ直前に文字列化（例: "20" + "2606" -> "202606"）
+        df_final_oi["限月"] = ("20" + df_final_oi["限月"].astype(str)).str.strip()
         join_keys = ["取得日", "プットコール種別", "限月", "権利行使価格"]
         df_merged = pd.merge(df_final_tp, df_final_oi, on=join_keys, how="inner")
         
@@ -298,29 +298,20 @@ if __name__ == "__main__":
             df_merged["GEX符号"] = df_merged["プットコール種別"].map({"call": 1.0, "put": -1.0})
             df_merged["GEX_raw"] = df_merged["ガンマ"] * df_merged["当日建玉残高"] * 1000 * df_merged["原資産価格_S"] * 0.01 * df_merged["GEX符号"]
             df_merged["GEX(億円)"] = df_merged["GEX_raw"] / 100000000.0
-            
             df_merged["原資産終値"] = df_merged["原資産価格_S"]
             
             # --- 🌟 プルダウン（セレクトボックス）構築処理 🌟 ---
-            # 1. 完全に独立したPython標準の空のリストを用意
-            options = []
-            unique_months = sorted(df_merged["限月"].dropna().unique())
+            # 限月列は最初から文字列型なので、余計なキャスト不要でシンプルに結合できます。
+            unique_months = sorted(df_merged["限月"].dropna().unique().tolist())
+            options = unique_months + ["直近3限月合計"]
             
-            # 2. 1要素ずつ明示的に「文字列（str）」に変換して配列に追加（型誤認を徹底排除）
-            for m in unique_months:
-                options.append(str(int(m)))
-                
-            # 3. 最後に純粋な文字列として「直近3限月合計」を結合
-            options.append("直近3限月合計")
-            
-            # 4. セレクトボックスを画面に配置（初期値 index は配列の最後＝「直近3限月合計」に固定）
             selected_target = st.selectbox(
                 "表示する限月を選択してください", 
                 options=options, 
                 index=len(options) - 1
             )
             
-            # 5. 安全にグラフを描画
+            # 安全にグラフを描画
             generate_gex_plots(df_merged, selected_target)
             # --------------------------------------------------
             
@@ -330,19 +321,18 @@ if __name__ == "__main__":
                 "取引高", "当日建玉残高", "前日比", "前日建玉残高",
                 "デルタ", "ガンマ", "ベガ", "セータ", "GEX(億円)"
             ]
-            df_merged = df_merged[final_columns_order].copy()
-            print(f"グリークス・GEX計算完了: {len(df_merged)} 行の拡張データを生成しました。")
+            df_merged_to_sheet = df_merged[final_columns_order].copy()
         else:
             final_columns_order = [
                 "取得日", "プットコール種別", "限月", "権利行使価格", 
                 "理論価格", "ボラティリティ", "原資産終値", 
                 "取引高", "当日建玉残高", "前日比", "前日建玉残高"
             ]
-            df_merged = df_merged[final_columns_order].copy()
+            df_merged_to_sheet = df_merged[final_columns_order].copy()
 
     # スプレッドシート永続化処理
-    if not df_merged.empty and SPREADSHEET_ID:
+    if not df_merged_to_sheet.empty and SPREADSHEET_ID:
         try:
-            update_google_sheet(df_merged, SPREADSHEET_ID)
+            update_google_sheet(df_merged_to_sheet, SPREADSHEET_ID)
         except Exception as e:
             print(f"【エラー】書き込み処理中に例外が発生しました: {e}")
