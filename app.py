@@ -89,12 +89,15 @@ def calculate_greeks(row):
 
 def process_data(df_oi):
     if df_oi is None or df_oi.empty: return pd.DataFrame()
+    
+    # 💡 修正箇所：確実に「当日建玉残高」に統一
     temp_columns = ["限月取引", "取引高", "当日建玉残高", "前日比", "前日建玉残高"]
     df_put = df_oi.iloc[:, [0, 1, 2, 3, 4]].copy()
     df_put.columns = temp_columns
     df_call = df_oi.iloc[:, [6, 7, 8, 9, 10]].copy()
     df_call.columns = temp_columns
     df_combined = pd.concat([df_put, df_call], ignore_index=True)
+    
     df_combined["限月取引"] = df_combined["限月取引"].astype(str).str.strip()
     df_combined = df_combined[
         df_combined["限月取引"].str.contains("NIKKEI", na=False, case=False) & 
@@ -106,12 +109,20 @@ def process_data(df_oi):
     df_combined["限月"] = extracted[1]
     df_combined["権利行使価格"] = extracted[2]
     df_combined = df_combined.dropna(subset=["プットコール種別", "限月", "権利行使価格"])
-    num_cols = ["権利行使価格", "取引高", "当日建玉残残高", "前日比", "前日建玉残高"]
+    
+    # 💡 修正箇所：安全に数値キャストを行うために独立した新しい DataFrame を用意
+    df_clean = pd.DataFrame()
+    df_clean["プットコール種別"] = df_combined["プットコール種別"]
+    df_clean["限月"] = df_combined["限月"]
+    
+    num_cols = ["権利行使価格", "取引高", "当日建玉残高", "前日比", "前日建玉残高"]
     for col in num_cols:
-        # 正しい列名への変換（タイポ修正）
-        target_col = "当日建玉残高" if col == "当日建玉残残高" else col
-        df_combined[target_col] = pd.to_numeric(df_combined[col].astype(str).str.replace(r'[\s,]', '', regex=True).replace('-', '0'), errors='coerce').fillna(0).astype(int)
-    return df_combined.reset_index(drop=True)
+        df_clean[col] = pd.to_numeric(
+            df_combined[col].astype(str).str.replace(r'[\s,]', '', regex=True).replace('-', '0'), 
+            errors='coerce'
+        ).fillna(0).astype(int)
+        
+    return df_clean.reset_index(drop=True)
 
 def process_tp_data(df_tp):
     if df_tp is None or df_tp.empty: return pd.DataFrame()
@@ -126,11 +137,9 @@ def process_tp_data(df_tp):
     underlying = df_filtered["原資産終値"].iloc[0]
     df_filtered = df_filtered[(df_filtered["権利行使価格"] >= underlying * 0.85) & (df_filtered["権利行使価格"] <= underlying * 1.15)]
     
-    # 💡 修正箇所：「ボラリティリティ_put」を「ボラティリティ_put」に修正
     df_p = df_filtered[["限月", "権利行使価格", "理論価格_put", "ボラティリティ_put", "原資産終値"]].rename(columns={"理論価格_put": "理論価格", "ボラティリティ_put": "ボラティリティ"}).copy()
     df_p["プットコール種別"] = "put"
     
-    # 💡 修正箇所：「ボラリティリティ_call」を「ボラティリティ_call」に修正
     df_c = df_filtered[["限月", "権利行使価格", "理論価格_call", "ボラティリティ_call", "原資産終値"]].rename(columns={"理論価格_call": "理論価格", "ボラティリティ_call": "ボラティリティ"}).copy()
     df_c["プットコール種別"] = "call"
     
