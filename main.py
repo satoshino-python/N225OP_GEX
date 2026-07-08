@@ -16,6 +16,9 @@ import matplotlib
 matplotlib.use('Agg')  # GUIのないサーバー環境（GitHub Actions等）でも動くように設定
 import matplotlib.pyplot as plt
 
+# 🌟 Streamlitをインポート
+import streamlit as st
+
 # 日本語文字化け対策（入っていない場合はフォント設定をマニュアル指定にフォールバック）
 try:
     import japanize_matplotlib
@@ -56,6 +59,7 @@ def download_jpx_data(date_str):
             content = res_tp.content.decode('utf-8')
         except UnicodeDecodeError:
             content = res_tp.content.decode('shift_jis')
+        
         df_tp = pd.read_csv(StringIO(content))
         print("理論価格の取得に成功しました。")
         
@@ -67,7 +71,7 @@ def download_jpx_data(date_str):
             content = res_settle.content.decode('shift_jis')
         df_settle = pd.read_csv(StringIO(content), header=None)
         print("清算数値（グリークス用インプット）の取得に成功しました。")
-        
+    
     return df_oi, df_tp, df_settle
 
 def extract_greeks_inputs(df_settle):
@@ -91,7 +95,7 @@ def extract_greeks_inputs(df_settle):
         df_filtered[7] = pd.to_numeric(df_filtered[7], errors='coerce')
         df_filtered[9] = pd.to_numeric(df_filtered[9], errors='coerce')
         df_filtered[10] = pd.to_numeric(df_filtered[10], errors='coerce')
-        
+      
         df_filtered = df_filtered.dropna(subset=[3, 7, 9, 10])
 
         unique_months = sorted(df_filtered[3].unique(), reverse=False)
@@ -151,7 +155,7 @@ def calculate_greeks(row):
 
 def process_data(df_oi, df_tp):
     if df_oi is None or df_oi.empty:
-        return pd.DataFrame()
+         return pd.DataFrame()
     df_clean = df_oi.copy()
     put_cols = [0, 1, 2, 3, 4]
     call_cols = [6, 7, 8, 9, 10]
@@ -243,52 +247,45 @@ def process_tp_data(df_tp):
 
     return df_final_tp
 
-# 🌟 新規追加：ガンマエクスポージャーのグラフ生成・保存関数
-def generate_gex_plots(df_merged):
-    print("--- ガンマエクスポージャー（GEX）のグラフを生成します ---")
+# 🌟 変更箇所：引数に「選択された対象(selected_target)」を受け取り、Streamlit上でグラフを描画・出力する仕組みに変更
+def generate_gex_plots(df_merged, selected_target):
+    print(f"--- ガンマエクスポージャー（GEX）のグラフを生成します: {selected_target} ---")
     unique_months = sorted(df_merged["限月"].unique())
     
-    for month in unique_months:
-        df_month = df_merged[df_merged["限月"] == month].copy()
+    if selected_target == "直近3限月合計":
+        df_plot = df_merged.copy()
+        title_str = "直近3限月合計"
+        # 合算時の基準価格は、直近限月の原資産価格を代表値として使用
+        underlying_price = df_merged[df_merged["限月"] == unique_months[0]]["原資産価格_S"].iloc[0]
+    else:
+        df_plot = df_merged[df_merged["限月"] == int(selected_target)].copy()
+        title_str = f"限月: {selected_target}"
+        underlying_price = df_plot["原資産価格_S"].iloc[0]
         
-        # 権利行使価格ごとにGEXを合算（Call GEX - Put GEX がすでに計算されて集約されている状態を作る）
-        # 横軸を権利行使価格にするため、Strikeごとの合計値を算出
-        gex_summary = df_month.groupby("権利行使価格")["GEX(億円)"].sum().sort_index()
+    gex_summary = df_plot.groupby("権利行使価格")["GEX(億円)"].sum().sort_index()
+    
+    if gex_summary.empty:
+        st.warning("表示するデータがありません。")
+        return
         
-        if gex_summary.empty:
-            continue
-            
-        # その限月の基準原資産価格（先物価格）を取得
-        underlying_price = df_month["原資産価格_S"].iloc[0]
-        
-        # プロットエリアの設定
-        plt.figure(figsize=(12, 6))
-        
-        # プラスとマイナスで色分けする（プラスは青、マイナスは赤）
-        colors = ['#1f77b4' if val >= 0 else '#d62728' for val in gex_summary.values]
-        
-        # 棒グラフの描画
-        plt.bar(gex_summary.index, gex_summary.values, color=colors, width=200, edgecolor='black', alpha=0.8)
-        
-        # 基準となる原資産価格（現価格）に垂直の点線を引く
-        plt.axvline(x=underlying_price, color='green', linestyle='--', linewidth=1.5, label=f'原資産価格 (先物): {underlying_price:,.0f}')
-        
-        # グラフの装飾
-        plt.title(f"日経225オプション ガンマエクスポージャー (GEX) - 限月: {month}", fontsize=14, fontweight='bold')
-        plt.xlabel("権利行使価格 (Strike)", fontsize=12)
-        plt.ylabel("GEX (億円 / 原資産1%変動あたり)", fontsize=12)
-        plt.grid(True, linestyle=':', alpha=0.6)
-        plt.legend(loc="upper left")
-        
-        # グラフのX軸範囲を原資産価格の±10%程度に絞って見やすくする
-        plt.xlim(underlying_price * 0.90, underlying_price * 1.10)
-        
-        # 画像としてローカル環境に保存
-        filename = f"gex_chart_{month}.png"
-        plt.tight_layout()
-        plt.savefig(filename, dpi=150)
-        plt.close()
-        print(f"✨ グラフ画像を保存しました: {filename}")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    colors = ['#1f77b4' if val >= 0 else '#d62728' for val in gex_summary.values]
+    
+    ax.bar(gex_summary.index, gex_summary.values, color=colors, width=200, edgecolor='black', alpha=0.8)
+    ax.axvline(x=underlying_price, color='green', linestyle='--', linewidth=1.5, label=f'原資産価格 (先物代表): {underlying_price:,.0f}')
+    
+    ax.set_title(f"日経225オプション ガンマエクスポージャー (GEX) - {title_str}", fontsize=14, fontweight='bold')
+    ax.set_xlabel("権利行使価格 (Strike)", fontsize=12)
+    ax.set_ylabel("GEX (億円 / 原資産1%変動あたり)", fontsize=12)
+    ax.grid(True, linestyle=':', alpha=0.6)
+    ax.legend(loc="upper left")
+    ax.set_xlim(underlying_price * 0.90, underlying_price * 1.10)
+    
+    plt.tight_layout()
+    
+    # 🌟 Streamlitのウェブページ上にグラフを出力
+    st.pyplot(fig)
+    plt.close(fig)
 
 def update_google_sheet(df, spreadsheet_id):
     scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
@@ -299,34 +296,30 @@ def update_google_sheet(df, spreadsheet_id):
     sh = gc.open_by_key(spreadsheet_id)
     worksheet = sh.get_worksheet(0)
     
-    # シートの現在の全データを取得
     existing_data = worksheet.get_all_values()
     
-    # 🌟 判定の強化：すべての行・セルの文字数をカウントし、本当に文字が1文字でもあるかチェック
-    #（[['']] のような空文字だけのリストを「空」とみなすようにします）
     is_sheet_empty = True
     if existing_data:
         for row in existing_data:
-            # 行の中のセルの文字を結合して、空白を除いた長さを確認
             if len("".join(row).strip()) > 0:
                 is_sheet_empty = False
                 break
 
-    # DataFrameのデータをリスト形式に変換
     data_to_append = df.values.tolist()
     
     if is_sheet_empty:
-        # 🌟 シートが実質的に空なら、ヘッダー（列名）を先頭に結合して書き込む
         header = [df.columns.tolist()]
         worksheet.append_rows(header + data_to_append)
         print("シートが空であることを確認したため、ヘッダーとデータを書き込みました。")
     else:
-        # すでに文字データが存在する場合は、データのみを追記する
         worksheet.append_rows(data_to_append)
         print("既存のデータがあるため、データのみを追記しました。")
 
 if __name__ == "__main__":
     if "pip" in sys.argv: pass 
+    
+    # 🌟 Streamlitアプリのタイトル
+    st.title("日経225オプション GEXアナリティクス")
     
     SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
     GOOGLE_CREDENTIALS = os.environ.get("GOOGLE_CREDENTIALS")
@@ -335,7 +328,7 @@ if __name__ == "__main__":
     df_oi, df_tp, df_settle = download_jpx_data(date_str)
     
     if df_oi is None and df_tp is None:
-        print("【判定】データが取得できなかったため、処理を終了します。")
+        st.error("【判定】データが取得できなかったため、処理を終了します。")
         sys.exit(1)
 
     df_greeks_inputs = extract_greeks_inputs(df_settle)
@@ -355,23 +348,21 @@ if __name__ == "__main__":
             print("--- グリークス計算インプットを結合し、Black-Scholes指標を算出します ---")
             df_merged = pd.merge(df_merged, df_greeks_inputs, on=["限月"], how="inner")
             
-            # 各行に対して一括計算を適用（デルタ、ガンマ、ベガ、セータ）
             df_merged[["デルタ", "ガンマ", "ベガ", "セータ"]] = df_merged.apply(calculate_greeks, axis=1)
             
-            # 🌟 新規追加：ガンマエクスポージャー（GEX）の計算
-            # マーケットメーカー売り越し前提：Callはプラス、Putはマイナス符号を乗じる
-            # GEX ＝ ガンマ * 当日建玉残高 * 乗数(1000) * 原資産価格_S * 1%
-            # 金額が大きくなるため、100,000,000(1億円)で割って「億円単位」に変換
             df_merged["GEX符号"] = df_merged["プットコール種別"].map({"call": 1.0, "put": -1.0})
             df_merged["GEX_raw"] = df_merged["ガンマ"] * df_merged["当日建玉残高"] * 1000 * df_merged["原資産価格_S"] * 0.01 * df_merged["GEX符号"]
             df_merged["GEX(億円)"] = df_merged["GEX_raw"] / 100000000.0
             
-            # 🌟 新規追加：GEXグラフ画像の生成処理をキック
-            generate_gex_plots(df_merged)
+            # 🌟 変更箇所：Streamlitのプルダウン（セレクトボックス）を作成し、選択された対象をグラフ生成関数に渡す
+            unique_months = sorted(df_merged["限月"].unique())
+            options = [str(m) for m in unique_months] + ["直近3限月合計"]
+            
+            selected_target = st.selectbox("表示する限月を選択してください", options, index=len(options)-1)
+            generate_gex_plots(df_merged, selected_target)
             
             df_merged["原資産終値"] = df_merged["原資産価格_S"]
             
-            # 格納・出力する列順を再定義（GEXを追加）
             final_columns_order = [
                 "取得日", "プットコール種別", "限月", "権利行使価格", 
                 "理論価格", "ボラティリティ", "原資産終値", 
@@ -399,4 +390,4 @@ if __name__ == "__main__":
             print(f"【エラー】書き込み処理中に例外が発生しました: {e}")
             sys.exit(1)
     else:
-        print("【スキップ】結合データが空のため、書き込み処理をスキップしました。")
+         print("【スキップ】結合データが空のため、書き込み処理をスキップしました。")
