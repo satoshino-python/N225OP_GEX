@@ -356,7 +356,7 @@ if __name__ == "__main__":
             
             # 🌟 変更箇所：Streamlitのプルダウン（セレクトボックス）を作成し、選択された対象をグラフ生成関数に渡す
             unique_months = sorted(df_merged["限月"].unique())
-            options = [str(m) for m in unique_months] + ["直近3限月合計"]
+            options = [str(int(m)) for m in unique_months] + ["直近3限月合計"]
             
             selected_target = st.selectbox("表示する限月を選択してください", options, index=len(options)-1)
             generate_gex_plots(df_merged, selected_target)
