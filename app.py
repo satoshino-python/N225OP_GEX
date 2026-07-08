@@ -106,9 +106,11 @@ def process_data(df_oi):
     df_combined["限月"] = extracted[1]
     df_combined["権利行使価格"] = extracted[2]
     df_combined = df_combined.dropna(subset=["プットコール種別", "限月", "権利行使価格"])
-    num_cols = ["権利行使価格", "取引高", "当日建玉残高", "前日比", "前日建玉残高"]
+    num_cols = ["権利行使価格", "取引高", "当日建玉残残高", "前日比", "前日建玉残高"]
     for col in num_cols:
-        df_combined[col] = pd.to_numeric(df_combined[col].astype(str).str.replace(r'[\s,]', '', regex=True).replace('-', '0'), errors='coerce').fillna(0).astype(int)
+        # 正しい列名への変換（タイポ修正）
+        target_col = "当日建玉残高" if col == "当日建玉残残高" else col
+        df_combined[target_col] = pd.to_numeric(df_combined[col].astype(str).str.replace(r'[\s,]', '', regex=True).replace('-', '0'), errors='coerce').fillna(0).astype(int)
     return df_combined.reset_index(drop=True)
 
 def process_tp_data(df_tp):
@@ -123,10 +125,15 @@ def process_tp_data(df_tp):
     df_filtered = df_filtered[df_filtered["限月"].isin(target_months)]
     underlying = df_filtered["原資産終値"].iloc[0]
     df_filtered = df_filtered[(df_filtered["権利行使価格"] >= underlying * 0.85) & (df_filtered["権利行使価格"] <= underlying * 1.15)]
-    df_p = df_filtered[["限月", "権利行使価格", "理論価格_put", "ボラリティリティ_put", "原資産終値"]].rename(columns={"理論価格_put": "理論価格", "ボラティリティ_put": "ボラティリティ"}).copy()
+    
+    # 💡 修正箇所：「ボラリティリティ_put」を「ボラティリティ_put」に修正
+    df_p = df_filtered[["限月", "権利行使価格", "理論価格_put", "ボラティリティ_put", "原資産終値"]].rename(columns={"理論価格_put": "理論価格", "ボラティリティ_put": "ボラティリティ"}).copy()
     df_p["プットコール種別"] = "put"
+    
+    # 💡 修正箇所：「ボラリティリティ_call」を「ボラティリティ_call」に修正
     df_c = df_filtered[["限月", "権利行使価格", "理論価格_call", "ボラティリティ_call", "原資産終値"]].rename(columns={"理論価格_call": "理論価格", "ボラティリティ_call": "ボラティリティ"}).copy()
     df_c["プットコール種別"] = "call"
+    
     df_res = pd.concat([df_p, df_c], ignore_index=True)
     df_res["理論価格"] = pd.to_numeric(df_res["理論価格"].astype(str).str.replace(r'[\s,]', '', regex=True).replace('-', '0'), errors='coerce').fillna(0).astype(float)
     df_res["ボラティリティ"] = pd.to_numeric(df_res["ボラティリティ"].astype(str).str.replace(r'[\s,]', '', regex=True).replace('-', '0'), errors='coerce').fillna(0).astype(float)
@@ -182,27 +189,21 @@ else:
     if df_merged is None or df_merged.empty or not data_date:
         st.error("❌ 直近5日分のデータがJPX（日本取引所グループ）側で見つかりませんでした。")
     else:
-        # 🌟 変更箇所①：限月のユニークリスト（数値型）を取得
         unique_months = sorted(df_merged["限月"].unique())
-        
-        # 🌟 変更箇所②：セレクトボックスの選択肢に「文字列化」した限月と「直近3限月合計」を追加
         options = [str(m) for m in unique_months] + ["直近3限月合計"]
         selected_option = st.sidebar.selectbox(
             "表示する限月を選択してください", 
             options=options,
-            index=len(options) - 1, # デフォルトで「直近3限月合計」を選択状態にする
+            index=len(options) - 1,
             key="gex_month_selector"
         )
         st.sidebar.info(f"📅 データ基準日: {data_date}")
         
-        # 🌟 変更箇所③：選択されたオプション（合計 or 単一限月）で抽出データを分岐
         if selected_option == "直近3限月合計":
             df_month = df_merged.copy()
             title_display = "直近3限月合計"
-            # 合計時の基準価格表示用には、最も期近（1番目）の原資産価格を代表として採用
             underlying_price = df_merged[df_merged["限月"] == unique_months[0]]["原資産価格_S"].iloc[0]
         else:
-            # 個別限月が選ばれた場合は、文字列をintにキャストして厳密に一致する行を抽出
             df_month = df_merged[df_merged["限月"] == int(selected_option)].copy()
             title_display = f"{selected_option} 限月"
             underlying_price = df_month["原資産価格_S"].iloc[0]
@@ -221,7 +222,6 @@ else:
         df_plot["建玉残高符号"] = df_plot["プットコール種別"].map({"call": 1, "put": -1})
         df_plot["ネット当日建玉残高"] = df_plot["当日建玉残高"] * df_plot["建玉残高符号"]
         
-        # 権利行使価格（Strike）ごとに集計（個別選択なら単一、合計選択なら全限月分がここで自動的に合算される）
         df_grouped = df_plot.groupby("権利行使価格").agg({
             "GEX(億円)": "sum",
             "ガンマ": "mean",     
@@ -281,6 +281,5 @@ else:
         df_month_display["GEX (億円×1万)"] = df_month_display["GEX(億円)"] * 10000
         df_month_display["ガンマ (1万倍)"] = df_month_display["ガンマ"] * 10000
         
-        # 合計表示の際は、「どの行がどの限月か」わかるように明示
         show_cols = ["限月", "プットコール種別", "権利行使価格", "理論価格", "ボラティリティ", "当日建玉残高", "デルタ", "ガンマ (1万倍)", "GEX (億円×1万)"]
         st.dataframe(df_month_display[show_cols].sort_values(by=["権利行使価格", "限月"]), use_container_width=True)
