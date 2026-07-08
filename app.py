@@ -89,41 +89,26 @@ def calculate_greeks(row):
 
 def process_data(df_oi):
     if df_oi is None or df_oi.empty: return pd.DataFrame()
-    
-    # 割り当てたい正しい列名の定義
     temp_columns = ["限月取引", "取引高", "当日建玉残高", "前日比", "前日建玉残高"]
-    
-    # main.py と同じ確実な列名上書き方法に修正
     df_put = df_oi.iloc[:, [0, 1, 2, 3, 4]].copy()
     df_put.columns = temp_columns
-    
     df_call = df_oi.iloc[:, [6, 7, 8, 9, 10]].copy()
     df_call.columns = temp_columns
-    
-    # 結合して前後の空白を除去
     df_combined = pd.concat([df_put, df_call], ignore_index=True)
-    
     df_combined["限月取引"] = df_combined["限月取引"].astype(str).str.strip()
-    
-    # 🌟 修正ポイント：'NIKKEI' を含み、かつ 'MINI' と '合計' を「含まない」行だけを厳密に抽出
     df_combined = df_combined[
         df_combined["限月取引"].str.contains("NIKKEI", na=False, case=False) & 
         ~df_combined["限月取引"].str.contains("MINI", na=False, case=False) & 
         ~df_combined["限月取引"].str.contains("合計", na=False)
     ]
-    
-    # 正規表現でスライス
     extracted = df_combined["限月取引"].str.extract(r"NIKKEI\s*225\s*([PC])(\d{4})-(\d+)", flags=re.IGNORECASE)
     df_combined["プットコール種別"] = extracted[0].str.upper().map({"P": "put", "C": "call"})
     df_combined["限月"] = extracted[1]
     df_combined["権利行使価格"] = extracted[2]
     df_combined = df_combined.dropna(subset=["プットコール種別", "限月", "権利行使価格"])
-    
-    # 数値型への一括変換
     num_cols = ["権利行使価格", "取引高", "当日建玉残高", "前日比", "前日建玉残高"]
     for col in num_cols:
         df_combined[col] = pd.to_numeric(df_combined[col].astype(str).str.replace(r'[\s,]', '', regex=True).replace('-', '0'), errors='coerce').fillna(0).astype(int)
-        
     return df_combined.reset_index(drop=True)
 
 def process_tp_data(df_tp):
@@ -136,15 +121,12 @@ def process_tp_data(df_tp):
     df_filtered["原資産終値"] = pd.to_numeric(df_filtered["原資産終値"], errors='coerce')
     target_months = sorted(df_filtered["限月"].dropna().unique())[:3]
     df_filtered = df_filtered[df_filtered["限月"].isin(target_months)]
-    
     underlying = df_filtered["原資産終値"].iloc[0]
     df_filtered = df_filtered[(df_filtered["権利行使価格"] >= underlying * 0.85) & (df_filtered["権利行使価格"] <= underlying * 1.15)]
-    
-    df_p = df_filtered[["限月", "権利行使価格", "理論価格_put", "ボラティリティ_put", "原資産終値"]].rename(columns={"理論価格_put": "理論価格", "ボラティリティ_put": "ボラティリティ"}).copy()
+    df_p = df_filtered[["限月", "権利行使価格", "理論価格_put", "ボラリティリティ_put", "原資産終値"]].rename(columns={"理論価格_put": "理論価格", "ボラティリティ_put": "ボラティリティ"}).copy()
     df_p["プットコール種別"] = "put"
     df_c = df_filtered[["限月", "権利行使価格", "理論価格_call", "ボラティリティ_call", "原資産終値"]].rename(columns={"理論価格_call": "理論価格", "ボラティリティ_call": "ボラティリティ"}).copy()
     df_c["プットコール種別"] = "call"
-    
     df_res = pd.concat([df_p, df_c], ignore_index=True)
     df_res["理論価格"] = pd.to_numeric(df_res["理論価格"].astype(str).str.replace(r'[\s,]', '', regex=True).replace('-', '0'), errors='coerce').fillna(0).astype(float)
     df_res["ボラティリティ"] = pd.to_numeric(df_res["ボラティリティ"].astype(str).str.replace(r'[\s,]', '', regex=True).replace('-', '0'), errors='coerce').fillna(0).astype(float)
@@ -152,133 +134,107 @@ def process_tp_data(df_tp):
     df_res["権利行使価格"] = df_res["権利行使価格"].astype(int)
     return df_res
 
-# 🌟 データを一気につくって df_merged を返却するメイン関数
-# 🌟 データを一気につくって df_merged と「確定したデータ基準日」を返却するメイン関数
-@st.cache_data(ttl=3600)  # 1時間キャッシュして、アクセス毎のJPX負荷を減らす
+@st.cache_data(ttl=3600)
 def load_and_calculate_all_data():
-    # 1. ベースとなる本日の日付（JST）を取得
     utc_now = datetime.datetime.now(datetime.timezone.utc)
     jst_now = utc_now + datetime.timedelta(hours=9)
-    
     df_oi_raw, df_tp_raw, df_settle_raw = None, None, None
     confirmed_date_str = ""
-    
-    # 2. 最大5日前まで自動で遡ってデータを探すループ
     for i in range(5):
         target_date = jst_now - datetime.timedelta(days=i)
         date_str = target_date.strftime("%Y%m%d")
-        
-        # 土日はJPXのデータ更新がないため最初からスキップして高速化
-        if target_date.weekday() in [5, 6]:  # 5=土曜, 6=日曜
-            continue
-            
-        # JPXから3つのデータをダウンロード試行
+        if target_date.weekday() in [5, 6]: continue
         df_oi_raw, df_tp_raw, df_settle_raw = download_jpx_data(date_str)
-        
-        # 3つのデータがすべて正常に揃ったら、その日付で確定してループを抜ける
         if df_oi_raw is not None and df_tp_raw is not None and df_settle_raw is not None:
             confirmed_date_str = target_date.strftime("%Y/%m/%d")
             break
-            
-    # 全て遡ってもデータが1つも見つからなかった場合は空のデータフレームと空文字を返す
     if df_oi_raw is None or df_tp_raw is None or df_settle_raw is None:
         return pd.DataFrame(), ""
-        
-    # 3. 確定したデータを使用したパース・計算処理
     df_greeks_inputs = extract_greeks_inputs(df_settle_raw)
     df_final_oi = process_data(df_oi_raw)
     df_final_tp = process_tp_data(df_tp_raw)
-    
-    if df_final_oi.empty or df_final_tp.empty:
-        return pd.DataFrame(), ""
-        
-    # 建玉データと理論価格データのインナーマージ
+    if df_final_oi.empty or df_final_tp.empty: return pd.DataFrame(), ""
     df_final_oi["限月"] = pd.to_numeric("20" + df_final_oi["限月"].astype(str), errors='coerce').fillna(0).astype(int)
     df_merged = pd.merge(df_final_tp, df_final_oi, on=["プットコール種別", "限月", "権利行使価格"], how="inner")
-    
-    # グリークス計算インプットの結合とBlack-Scholes指標の算出
     if not df_greeks_inputs.empty:
         df_merged["限月"] = df_merged["限月"].astype(int)
         df_greeks_inputs["限月"] = df_greeks_inputs["限月"].astype(int)
         df_merged = pd.merge(df_merged, df_greeks_inputs, on=["限月"], how="inner")
-        
         if not df_merged.empty:
-            # 各行に対して一括計算を適用（デルタ、ガンマ、ベガ、セータ）
             df_merged[["デルタ", "ガンマ", "ベガ", "セータ"]] = df_merged.apply(calculate_greeks, axis=1)
-            
-            # ガンマエクスポージャー（GEX）の計算
-            # マーケットメーカー売り越し前提：Callはプラス、Putはマイナス符号を乗じる
             df_merged["GEX符号"] = df_merged["プットコール種別"].map({"call": 1.0, "put": -1.0})
             df_merged["GEX_raw"] = df_merged["ガンマ"] * df_merged["当日建玉残高"] * 1000 * df_merged["原資産価格_S"] * 0.01 * df_merged["GEX符号"]
             df_merged["GEX(億円)"] = df_merged["GEX_raw"] / 100000000.0
-            
-            # 計算済みのデータフレームと確定した日付文字列をセットで返却
             return df_merged, confirmed_date_str
-            
     return pd.DataFrame(), ""
 
 # --- 🚀 Streamlit 画面表示フェーズ ---
 st.title("📊 日経225オプション ガンマエクスポージャー (GEX) ダッシュボード")
 
-# 1. データの読み込み
 with st.spinner("JPXから最新データを取得し、GEXを計算中..."):
     result = load_and_calculate_all_data()
 
-# データの受け取りと安全チェック
 if result is None or not isinstance(result, tuple) or len(result) < 2:
     st.error("⚠️ データの初期化に失敗しました。アプリのキャッシュをクリアするか再起動してください。")
 else:
     df_merged, data_date = result
 
-    # 🌟 修正ポイント：過去5日遡っても本当にデータが1件もない場合のみエラーを出す
     if df_merged is None or df_merged.empty or not data_date:
         st.error("❌ 直近5日分のデータがJPX（日本取引所グループ）側で見つかりませんでした。")
-        st.info("土日祝日やシステムメンテナンス、またはURL構造の変更が発生している可能性があります。時間をおいて再度お試しください。")
     else:
-        # 2. 限月選択ボックスの配置
+        # 🌟 変更箇所①：限月のユニークリスト（数値型）を取得
         unique_months = sorted(df_merged["限月"].unique())
-        selected_month = st.sidebar.selectbox("表示する限月を選択してください", unique_months)
         
-        # 🌟 サイドバーに取得できた最新データの基準日を分かりやすく明示
+        # 🌟 変更箇所②：セレクトボックスの選択肢に「文字列化」した限月と「直近3限月合計」を追加
+        options = [str(m) for m in unique_months] + ["直近3限月合計"]
+        selected_option = st.sidebar.selectbox(
+            "表示する限月を選択してください", 
+            options=options,
+            index=len(options) - 1, # デフォルトで「直近3限月合計」を選択状態にする
+            key="gex_month_selector"
+        )
         st.sidebar.info(f"📅 データ基準日: {data_date}")
         
-        # 選択された限月のデータを抽出
-        df_month = df_merged[df_merged["限月"] == selected_month].copy()
+        # 🌟 変更箇所③：選択されたオプション（合計 or 単一限月）で抽出データを分岐
+        if selected_option == "直近3限月合計":
+            df_month = df_merged.copy()
+            title_display = "直近3限月合計"
+            # 合計時の基準価格表示用には、最も期近（1番目）の原資産価格を代表として採用
+            underlying_price = df_merged[df_merged["限月"] == unique_months[0]]["原資産価格_S"].iloc[0]
+        else:
+            # 個別限月が選ばれた場合は、文字列をintにキャストして厳密に一致する行を抽出
+            df_month = df_merged[df_merged["限月"] == int(selected_option)].copy()
+            title_display = f"{selected_option} 限月"
+            underlying_price = df_month["原資産価格_S"].iloc[0]
+
         gex_summary = df_month.groupby("権利行使価格")["GEX(億円)"].sum().sort_index()
-        underlying_price = df_month["原資産価格_S"].iloc[0]
         
-        # 3. 画面上に現在の主要な数値を配置
         col1, col2, col3 = st.columns(3)
-        col1.metric("データ基準日", data_date)  # 今日がなければ前営業日の日付が自動でここに入ります
+        col1.metric("データ基準日", data_date)
         col2.metric("基準原資産価格 (先物決済値)", f"{underlying_price:,.1f} 円")
         col3.metric("総データ行数 (Strike数)", f"{len(gex_summary)} 行")
 
         # 4. Plotlyによるインタラクティブなグラフ描画
-        st.subheader(f"📈 ガンマエクスポージャープロット - {selected_month} 限月 ({data_date} 基準)")
+        st.subheader(f"📈 ガンマエクスポージャープロット - {title_display} ({data_date} 基準)")
         
-        # データの整形
         df_plot = df_month.copy()
-        
-        # 🌟 建玉残高もCall（プラス）とPut（マイナス）で相殺するための符号付き列を作成
         df_plot["建玉残高符号"] = df_plot["プットコール種別"].map({"call": 1, "put": -1})
         df_plot["ネット当日建玉残高"] = df_plot["当日建玉残高"] * df_plot["建玉残高符号"]
         
-        # 権利行使価格（Strike）ごとに厳密に集計（Call/Putを相殺）
+        # 権利行使価格（Strike）ごとに集計（個別選択なら単一、合計選択なら全限月分がここで自動的に合算される）
         df_grouped = df_plot.groupby("権利行使価格").agg({
             "GEX(億円)": "sum",
-            "ガンマ": "mean",     # 同一Strikeの平均
-            "デルタ": "mean",     # 同一Strikeの平均
-            "ネット当日建玉残高": "sum" # 🌟 ここでCallとPutが相殺された純粋な残り枚数（差分）になります
+            "ガンマ": "mean",     
+            "デルタ": "mean",     
+            "ネット当日建玉残高": "sum" 
         }).reset_index()
         
-        # GEX（億円）とガンマをあらかじめ10,000倍に変換して上書き
         df_grouped["GEX (億円×1万)"] = df_grouped["GEX(億円)"] * 10000
         df_grouped["ガンマ (1万倍)"] = df_grouped["ガンマ"] * 10000
         df_grouped["方向"] = df_grouped["GEX (億円×1万)"].apply(lambda x: "Call優勢 (Long Gamma)" if x >= 0 else "Put優勢 (Short Gamma)")
         
         import plotly.express as px
         
-        # 縦軸（y）を 1万倍した「GEX (億円×1万)」に指定
         fig = px.bar(
             df_grouped,
             x="権利行使価格",
@@ -289,14 +245,13 @@ else:
             hover_data={
                 "権利行使価格": ":,d",
                 "GEX (億円×1万)": ":+,.0f",  
-                "ネット当日建玉残高": ":+,.0f",  # 🌟 符号付き（+や-）の相殺後枚数としてスッキリ表示
+                "ネット当日建玉残高": ":+,.0f",  
                 "デルタ": ":,.2f",
                 "ガンマ (1万倍)": ":,.2f",
                 "方向": False
             }
         )
         
-        # グラフのレイアウト調整
         fig.update_layout(
             xaxis_range=[underlying_price * 0.90, underlying_price * 1.10],
             hovermode="x unified",
@@ -322,10 +277,10 @@ else:
         
         # 5. 下部に生データテーブルを表示
         st.subheader("📋 算出データ詳細テーブル")
-        
         df_month_display = df_month.copy()
         df_month_display["GEX (億円×1万)"] = df_month_display["GEX(億円)"] * 10000
         df_month_display["ガンマ (1万倍)"] = df_month_display["ガンマ"] * 10000
         
-        show_cols = ["プットコール種別", "権利行使価格", "理論価格", "ボラティリティ", "当日建玉残高", "デルタ", "ガンマ (1万倍)", "GEX (億円×1万)"]
-        st.dataframe(df_month_display[show_cols].sort_values(by="権利行使価格"), use_container_width=True)
+        # 合計表示の際は、「どの行がどの限月か」わかるように明示
+        show_cols = ["限月", "プットコール種別", "権利行使価格", "理論価格", "ボラティリティ", "当日建玉残高", "デルタ", "ガンマ (1万倍)", "GEX (億円×1万)"]
+        st.dataframe(df_month_display[show_cols].sort_values(by=["権利行使価格", "限月"]), use_container_width=True)
