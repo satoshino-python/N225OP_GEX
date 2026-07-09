@@ -29,4 +29,4 @@ jobs:
       env:
         GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-      run: python main.py
+      run: python app.py
